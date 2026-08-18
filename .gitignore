@@ -1,0 +1,18 @@
+# Build and test output
+/bin/
+/kordn
+/coverage.out
+*.test
+*.prof
+
+# Local runtime and temporary material
+.kordn/
+*.pem
+*.key
+*.crt
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp

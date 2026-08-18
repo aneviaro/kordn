@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Format
+        run: make fmt-check
+      - name: Vet
+        run: make lint
+      - name: Tests
+        run: make test
+      - name: Race tests
+        run: make test-race
+      - name: License gate
+        run: make license-check
+      - name: Build
+        run: make build
