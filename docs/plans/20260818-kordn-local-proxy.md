@@ -93,12 +93,12 @@ Files:
 - Create: `test/integration/proxy_spike_test.go`, `test/fixtures/sigv4/` — CONNECT/TLS proof and initial AWS-published SigV4 vectors.
 
 Steps:
-- [ ] Initialize `github.com/kordn-ai/kordn`, pin an exact stable Go patch, add a minimal command tree, and define reproducible `make fmt`, `make lint`, `make test`, and `make test-race` targets used by CI.
-- [ ] Add Apache-2.0 licensing, DCO contribution guidance, vulnerability reporting, dependency license scanning, and explicit prohibition on deriving code from `iam-agent-proxy` without a license grant.
-- [ ] Implement an integration spike that starts a loopback CONNECT proxy, injects a test AWS endpoint classifier, presents a per-run CA leaf trusted only through the child CA setting, and reaches a test upstream without modifying system trust.
-- [ ] Add a second spike proving a non-AWS HTTPS destination retains its end-to-end server certificate and payload bytes through an opaque CONNECT tunnel.
-- [ ] Evaluate the pinned iamlive module against the required mapper inputs/outputs, choose import or minimal attributed derivation, populate all provenance files, and record rejected alternatives and the regression gate in ADR 0001.
-- [ ] Seed SigV4 canonicalization fixtures from AWS-published vectors without implementing production forwarding yet.
+- [x] Initialize `github.com/kordn-ai/kordn`, pin an exact stable Go patch, add a minimal command tree, and define reproducible `make fmt`, `make lint`, `make test`, and `make test-race` targets used by CI.
+- [x] Add Apache-2.0 licensing, DCO contribution guidance, vulnerability reporting, dependency license scanning, and explicit prohibition on deriving code from `iam-agent-proxy` without a license grant.
+- [x] Implement an integration spike that starts a loopback CONNECT proxy, injects a test AWS endpoint classifier, presents a per-run CA leaf trusted only through the child CA setting, and reaches a test upstream without modifying system trust.
+- [x] Add a second spike proving a non-AWS HTTPS destination retains its end-to-end server certificate and payload bytes through an opaque CONNECT tunnel.
+- [x] Evaluate the pinned iamlive module against the required mapper inputs/outputs, choose import or minimal attributed derivation, populate all provenance files, and record rejected alternatives and the regression gate in ADR 0001.
+- [x] Seed SigV4 canonicalization fixtures from AWS-published vectors without implementing production forwarding yet.
 
 Verification:
 - `make fmt-check && make lint && make test-race`

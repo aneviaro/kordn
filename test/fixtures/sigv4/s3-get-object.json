@@ -1,0 +1,14 @@
+{
+  "name": "s3-get-object-header-signed",
+  "source": "AWS S3 Signature Version 4 header-based authentication example",
+  "source_url": "https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html",
+  "algorithm": "AWS4-HMAC-SHA256",
+  "method": "GET",
+  "canonical_uri": "/test.txt",
+  "canonical_querystring": "",
+  "canonical_headers": "host:examplebucket.s3.amazonaws.com\nrange:bytes=0-9\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20130524T000000Z\n",
+  "signed_headers": "host;range;x-amz-content-sha256;x-amz-date",
+  "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "canonical_request_sha256": "7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972",
+  "credential_scope": "20130524/us-east-1/s3/aws4_request"
+}
