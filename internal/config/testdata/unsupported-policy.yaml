@@ -1,0 +1,15 @@
+apiVersion: kordn.dev/v1alpha1
+kind: LocalRunPolicy
+upstream:
+  profile: kordn-prod-ceiling
+  region: us-east-1
+proxy: {}
+policy:
+  default: deny
+  rules:
+    - id: bad
+      effect: allow
+      actions: [ec2:DescribeInstances]
+      resources: ["*"]
+      condition: {key: value}
+audit: {}

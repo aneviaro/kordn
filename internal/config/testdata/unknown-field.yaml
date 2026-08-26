@@ -1,0 +1,9 @@
+apiVersion: kordn.dev/v1alpha1
+kind: LocalRunPolicy
+upstream:
+  profile: kordn-prod-ceiling
+  region: us-east-1
+  credentialSource: environment
+proxy: {}
+policy: {}
+audit: {}

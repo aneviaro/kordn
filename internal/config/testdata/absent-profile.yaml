@@ -1,0 +1,7 @@
+apiVersion: kordn.dev/v1alpha1
+kind: LocalRunPolicy
+upstream:
+  region: us-east-1
+proxy: {}
+policy: {}
+audit: {}
