@@ -9,8 +9,9 @@ The iamlive MIT attribution retained under third_party/iamlive/ is included
 for the selected, separately bounded mapper integration described in
 docs/decisions/0001-iamlive-integration.md.
 
-The distributed configuration and schema validation dependencies retain their
-upstream copyright and license notices under third_party/licenses/.
+The distributed configuration, schema validation, and IDNA endpoint-normalization
+dependencies retain their upstream copyright and license notices under
+third_party/licenses/.
 
 The AWS SDK for Go v2 components and Smithy Go are Apache-2.0 licensed. Their
 retained license texts are under
