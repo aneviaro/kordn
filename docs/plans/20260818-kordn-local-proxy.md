@@ -195,13 +195,13 @@ Files:
 - Create: `internal/proxy/*_test.go`, `internal/pki/*_test.go`, `internal/awsrequest/endpoint_test.go` — authentication, lookalike, SSRF, certificate, cache, and tunnel tests.
 
 Steps:
-- [ ] Bind `127.0.0.1:0` by default, apply conservative header/request limits, require constant-time Basic proxy authentication on every request and CONNECT, and expose no unauthenticated endpoint.
-- [ ] Normalize case, trailing dot, port, and IDNA safely; classify exact commercial AWS regional/global and required FIPS/dual-stack fixtures using label boundaries and explicit metadata, with stable negative caching.
-- [ ] Validate that CONNECT authority and inner Host agree; reject plaintext AWS requests, unsupported partitions, custom endpoints, and mismatches rather than forwarding.
-- [ ] Before any direct or corporate-proxy tunnel, resolve and reject literal or DNS results that are loopback, unspecified, multicast, link-local, metadata, or otherwise prohibited; defend against DNS answer changes during dialing.
-- [ ] Tunnel non-AWS HTTPS as opaque bytes without logging paths/query/content and forward non-AWS plaintext only with standard hop-by-hop handling; keep non-AWS destination logging disabled by default.
-- [ ] Generate a new per-run CA in private storage, issue short-lived SAN-only exact-host leaves lazily, advertise ALPN `http/1.1`, bound the leaf cache, and remove CA/key material on shutdown or stale-run cleanup.
-- [ ] Build a separate outbound transport from the captured parent corporate proxy and system/public roots; prove it never reads child-local proxy variables or disables certificate validation.
+- [x] Bind `127.0.0.1:0` by default, apply conservative header/request limits, require constant-time Basic proxy authentication on every request and CONNECT, and expose no unauthenticated endpoint.
+- [x] Normalize case, trailing dot, port, and IDNA safely; classify exact commercial AWS regional/global and required FIPS/dual-stack fixtures using label boundaries and explicit metadata, with stable negative caching.
+- [x] Validate that CONNECT authority and inner Host agree; reject plaintext AWS requests, unsupported partitions, custom endpoints, and mismatches rather than forwarding.
+- [x] Before any direct or corporate-proxy tunnel, resolve and reject literal or DNS results that are loopback, unspecified, multicast, link-local, metadata, or otherwise prohibited; defend against DNS answer changes during dialing.
+- [x] Tunnel non-AWS HTTPS as opaque bytes without logging paths/query/content and forward non-AWS plaintext only with standard hop-by-hop handling; keep non-AWS destination logging disabled by default.
+- [x] Generate a new per-run CA in private storage, issue short-lived SAN-only exact-host leaves lazily, advertise ALPN `http/1.1`, bound the leaf cache, and remove CA/key material on shutdown or stale-run cleanup.
+- [x] Build a separate outbound transport from the captured parent corporate proxy and system/public roots; prove it never reads child-local proxy variables or disables certificate validation.
 
 Verification:
 - `go test -race ./internal/proxy ./internal/pki ./internal/awsrequest ./internal/cache`

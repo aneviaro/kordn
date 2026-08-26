@@ -55,8 +55,11 @@ The remaining exact module graph is explicitly enumerated by
 | `github.com/dlclark/regexp2` | `v1.11.0` | `third_party/licenses/regexp2/LICENSE` (MIT) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` | `third_party/licenses/jsonschema-v6/LICENSE` (Apache-2.0) |
 | `go.yaml.in/yaml/v3` | `v3.0.4` | `third_party/licenses/go-yaml-v3/LICENSE` (Apache-2.0 project files and MIT libyaml-derived files) |
+| `golang.org/x/crypto` | `v0.19.0` | `third_party/licenses/x-crypto/LICENSE` (BSD-3-Clause) |
 | `golang.org/x/mod` | `v0.8.0` | `third_party/licenses/x-mod/LICENSE` (BSD-3-Clause) |
-| `golang.org/x/sys` | `v0.5.0` | `third_party/licenses/x-sys/LICENSE` (BSD-3-Clause) |
+| `golang.org/x/net` | `v0.21.0` | `third_party/licenses/x-net/LICENSE` (BSD-3-Clause plus Go patent grant) |
+| `golang.org/x/sys` | `v0.17.0` | `third_party/licenses/x-sys/LICENSE` (BSD-3-Clause) |
+| `golang.org/x/term` | `v0.17.0` | `third_party/licenses/x-term/LICENSE` (BSD-3-Clause) |
 | `golang.org/x/text` | `v0.14.0` | `third_party/licenses/x-text/LICENSE` (BSD-3-Clause) |
 | `golang.org/x/tools` | `v0.6.0` | `third_party/licenses/x-tools/LICENSE` (BSD-3-Clause) |
 | `gopkg.in/check.v1` | `v1.0.0-20161208181325-20d25e280405` | `third_party/licenses/check-v1/LICENSE` (BSD-3-Clause) |
