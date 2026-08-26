@@ -1,0 +1,29 @@
+apiVersion: kordn.dev/v1alpha1
+kind: LocalRunPolicy
+
+upstream:
+  profile: kordn-prod-ceiling
+  assumeRoleArn: ""
+  externalId: ""
+  sourceIdentity: ""
+  roleSessionName: kordn-local
+  durationSeconds: 3600
+  region: us-east-1
+
+proxy:
+  listen: 127.0.0.1:0
+  nonAwsTraffic: tunnel
+  upstreamProxy: inherit
+  maxInMemoryBodyBytes: 8388608
+  maxSpoolBodyBytes: 67108864
+
+policy:
+  default: deny
+  rules: []
+
+audit:
+  path: ~/.kordn/audit/events.jsonl
+  fsync: batch
+  failureMode: deny
+  logResourceArns: true
+  hashResourceNames: false
