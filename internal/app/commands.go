@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package app contains the deliberately small command surface used while the
-// runtime is being built. Keeping argument parsing here gives later runtime
-// packages one composition root and avoids a second CLI-specific architecture.
+// Package app contains the command surface and the sole runtime composition
+// root. Parsing the child boundary here prevents a second shell-based path.
 package app
 
 import (
@@ -33,9 +32,9 @@ const usage = `Usage:
   kordn run [flags] -- <command> [args...]
 `
 
-// Main executes the bootstrap command tree and returns the process exit code.
-// Runtime commands intentionally stop at a clear bootstrap error until their
-// protected one-process pipeline is implemented in a later task.
+// Main executes the bootstrap command tree. Until the authenticated proxy and
+// CA pipeline exists, run intentionally fails closed rather than launching a
+// child with only partial protection.
 func Main(args []string) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(os.Stderr, usage)
@@ -63,11 +62,24 @@ func Main(args []string) int {
 		}
 	}
 
-	_, _ = fmt.Fprintf(os.Stderr, "kordn: unknown command %q\n\n%s", args[0], usage)
+	_, _ = fmt.Fprintf(os.Stderr, "kordn: unknown command\n\n%s", usage)
 	return 2
 }
 
-func runCommand(args []string) int {
+// RunInvocation is the parsed, direct child argv boundary. The runtime must
+// consume Argv as-is; it must never turn it into a shell command.
+type RunInvocation struct {
+	ConfigPath string
+	Quiet      bool
+	Verbose    bool
+	Argv       []string
+}
+
+// ParseRunArgs parses only Kordn flags before the mandatory --. Everything
+// after that marker belongs to the child, including values that look like
+// flags. Profile and role overrides are deliberately not accepted here: the
+// immutable configuration owns the upstream authority ceiling.
+func ParseRunArgs(args []string) (RunInvocation, error) {
 	separator := -1
 	for i, arg := range args {
 		if arg == "--" {
@@ -75,12 +87,46 @@ func runCommand(args []string) int {
 			break
 		}
 	}
-	if separator < 0 || separator == len(args)-1 {
-		_, _ = fmt.Fprintln(os.Stderr, "kordn run: the '--' separator and a child command are required")
+	if separator < 0 {
+		return RunInvocation{}, fmt.Errorf("the '--' separator and a child command are required")
+	}
+	if separator == len(args)-1 || args[separator+1] == "" {
+		return RunInvocation{}, fmt.Errorf("a child command is required after '--'")
+	}
+	var invocation RunInvocation
+	for i := 0; i < separator; i++ {
+		arg := args[i]
+		switch {
+		case arg == "--quiet":
+			invocation.Quiet = true
+		case arg == "--verbose":
+			invocation.Verbose = true
+		case arg == "--config":
+			if i+1 >= separator || args[i+1] == "" {
+				return RunInvocation{}, fmt.Errorf("--config requires a path")
+			}
+			invocation.ConfigPath = args[i+1]
+			i++
+		case len(arg) > len("--config=") && arg[:len("--config=")] == "--config=":
+			invocation.ConfigPath = arg[len("--config="):]
+			if invocation.ConfigPath == "" {
+				return RunInvocation{}, fmt.Errorf("--config requires a path")
+			}
+		default:
+			// Do not echo arbitrary flag text: callers may accidentally place
+			// credential-like material in a malformed option.
+			return RunInvocation{}, fmt.Errorf("unsupported run flag")
+		}
+	}
+	invocation.Argv = append([]string(nil), args[separator+1:]...)
+	return invocation, nil
+}
+
+func runCommand(args []string) int {
+	if _, err := ParseRunArgs(args); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "kordn run: %v\n", err)
 		return 2
 	}
-	// Validate the boundary now. Passing an argv slice directly (rather than
-	// invoking a shell) is part of the command contract for the runtime.
 	_, _ = fmt.Fprintln(os.Stderr, "kordn run: protected runtime is not available in bootstrap")
 	return 78
 }
@@ -90,6 +136,4 @@ func notReady(command string) int {
 	return 78
 }
 
-// compile-time assertion documenting that this package's output is ordinary
-// io-compatible CLI output and does not require a logging dependency.
 var _ io.Writer = os.Stdout

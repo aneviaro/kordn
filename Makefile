@@ -36,19 +36,32 @@ license-check:
 	modules="$$($(GO) list -m -f '{{.Path}}@{{.Version}}' all)"; \
 	for module in $$modules; do \
 		case "$$module" in \
-			github.com/kordn-ai/kordn|github.com/kordn-ai/kordn@|github.com/dlclark/regexp2@v1.11.0|github.com/santhosh-tekuri/jsonschema/v6@v6.0.3|go.yaml.in/yaml/v3@v3.0.4|golang.org/x/mod@v0.8.0|golang.org/x/sys@v0.5.0|golang.org/x/text@v0.14.0|golang.org/x/tools@v0.6.0|gopkg.in/check.v1@v0.0.0-20161208181325-20d25e280405) ;; \
+			github.com/kordn-ai/kordn@|\
+			github.com/aws/aws-sdk-go-v2@v1.37.2|\
+			github.com/aws/aws-sdk-go-v2/config@v1.29.3|\
+			github.com/aws/aws-sdk-go-v2/credentials@v1.17.56|\
+			github.com/aws/aws-sdk-go-v2/feature/ec2/imds@v1.16.26|\
+			github.com/aws/aws-sdk-go-v2/internal/configsources@v1.4.2|\
+			github.com/aws/aws-sdk-go-v2/internal/endpoints/v2@v2.7.2|\
+			github.com/aws/aws-sdk-go-v2/internal/ini@v1.8.2|\
+			github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding@v1.13.0|\
+			github.com/aws/aws-sdk-go-v2/service/internal/presigned-url@v1.13.2|\
+			github.com/aws/aws-sdk-go-v2/service/sso@v1.24.13|\
+			github.com/aws/aws-sdk-go-v2/service/ssooidc@v1.28.12|\
+			github.com/aws/aws-sdk-go-v2/service/sts@v1.36.0|\
+			github.com/aws/smithy-go@v1.22.5|\
+			github.com/dlclark/regexp2@v1.11.0|\
+			github.com/santhosh-tekuri/jsonschema/v6@v6.0.3|\
+			go.yaml.in/yaml/v3@v3.0.4|\
+			golang.org/x/mod@v0.8.0|\
+			golang.org/x/sys@v0.5.0|\
+			golang.org/x/text@v0.14.0|\
+			golang.org/x/tools@v0.6.0|\
+			gopkg.in/check.v1@v1.0.0-20161208181325-20d25e280405) ;; \
 			*) echo "unreviewed Go module: $$module" >&2; exit 1 ;; \
 		esac; \
 	done; \
-	for license in \
-		third_party/licenses/go-yaml-v3/LICENSE \
-		third_party/licenses/jsonschema-v6/LICENSE \
-		third_party/licenses/regexp2/LICENSE \
-		third_party/licenses/x-mod/LICENSE \
-		third_party/licenses/x-sys/LICENSE \
-		third_party/licenses/x-text/LICENSE \
-		third_party/licenses/x-tools/LICENSE \
-		third_party/licenses/check-v1/LICENSE; do \
+	for license in $$(find third_party/licenses -type f -name LICENSE -print); do \
 		test -s "$$license"; \
 	done; \
 	test -s LICENSE; \
@@ -57,12 +70,16 @@ license-check:
 	test -s third_party/iamlive/LICENSE; \
 	test -s third_party/iamlive/NOTICE; \
 	test -s third_party/iamlive/UPSTREAM_COMMIT; \
+	test -s third_party/licenses/aws-sdk-v2/LICENSE; \
+	test -s third_party/licenses/smithy-go/LICENSE; \
 	grep -q 'Apache License' LICENSE; \
+	grep -q 'Apache License' third_party/licenses/aws-sdk-v2/LICENSE; \
+	grep -q 'Apache License' third_party/licenses/smithy-go/LICENSE; \
 	grep -q 'MIT License' third_party/iamlive/LICENSE; \
 	grep -q 'iam-agent-proxy' SECURITY.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md; \
 	grep -q 'go-yaml-v3/LICENSE' THIRD_PARTY_NOTICES.md; \
 	grep -q 'jsonschema-v6/LICENSE' THIRD_PARTY_NOTICES.md; \
-	echo "license-check: PASS (approved modules; Apache-2.0 original code; third-party provenance recorded)"
+	echo "license-check: PASS (approved modules; AWS SDK v2/Smithy provenance recorded)"
 
 build:
 	@mkdir -p $$(dirname $(BINARY))

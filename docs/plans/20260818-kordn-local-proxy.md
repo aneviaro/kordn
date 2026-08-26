@@ -161,13 +161,13 @@ Files:
 - Modify: `internal/app/commands.go` — enforce mandatory `--` and direct argv handling for `run`.
 
 Steps:
-- [ ] Build the AWS SDK for Go v2 provider from the explicit profile, optionally wrap it in one fixed AssumeRole provider, memoize refresh, and reject child-controlled profile/role inputs.
-- [ ] Complete SSO/MFA/`credential_process` resolution and one `sts:GetCallerIdentity` preflight before child launch; retain only the provider and non-secret identity metadata.
-- [ ] Generate cryptographically random run ID, clearly local fake access key, secret, session token, and Basic proxy credential that remain stable for the run.
-- [ ] Create a `0700` per-run directory and `0600` synthetic AWS config/credentials files containing only fake credentials, selected Region, and Kordn CA reference; never modify user AWS files.
-- [ ] Construct a dedicated child environment that sets every Section 7 variable, clears web-identity/container/role fallback variables, sets uppercase and lowercase proxy variables consistently, and leaves Kordn's own environment/transport unchanged.
-- [ ] Execute the child argv directly, create a POSIX process group, forward interrupt/termination/resize signals, preserve healthy child exit status/signal, implement exits 78/70/126, bounded drain hooks, and abandoned-runtime cleanup.
-- [ ] Add a long-lived child fixture that repeatedly inspects standard provider sources and confirms it sees the same fake credential while no real credential appears in environment, synthetic files, logs, or errors.
+- [x] Build the AWS SDK for Go v2 provider from the explicit profile, optionally wrap it in one fixed AssumeRole provider, memoize refresh, and reject child-controlled profile/role inputs.
+- [x] Complete SSO/MFA/`credential_process` resolution and one `sts:GetCallerIdentity` preflight before child launch; retain only the provider and non-secret identity metadata.
+- [x] Generate cryptographically random run ID, clearly local fake access key, secret, session token, and Basic proxy credential that remain stable for the run.
+- [x] Create a `0700` per-run directory and `0600` synthetic AWS config/credentials files containing only fake credentials, selected Region, and Kordn CA reference; never modify user AWS files.
+- [x] Construct a dedicated child environment that sets every Section 7 variable, clears web-identity/container/role fallback variables, sets uppercase and lowercase proxy variables consistently, and leaves Kordn's own environment/transport unchanged.
+- [x] Execute the child argv directly, create a POSIX process group, forward interrupt/termination/resize signals, preserve healthy child exit status/signal, implement exits 78/70/126, bounded drain hooks, and abandoned-runtime cleanup.
+- [x] Add a long-lived child fixture that repeatedly inspects standard provider sources and confirms it sees the same fake credential while no real credential appears in environment, synthetic files, logs, or errors.
 
 Verification:
 - `go test -race ./internal/credentials ./internal/runtime`
