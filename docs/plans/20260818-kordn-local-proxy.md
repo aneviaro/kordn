@@ -340,14 +340,14 @@ Files:
 - Create: `internal/app/*_test.go`, `test/integration/pipeline_test.go` — startup, fail-closed, CLI, request, audit, and shutdown tests.
 
 Steps:
-- [ ] Implement all Section 14 event types and fields, append-only `0600` JSONL storage, schema versioning, configurable batch/decision fsync, bounded queue, flush, and writer-failure state.
-- [ ] Centralize redaction for logs/audit/errors; remove authorization, proxy auth, tokens, keys, bodies, cookies, presigned signatures, raw environment, and default command arguments; support deterministic resource-name hashing.
-- [ ] Add endpoint, leaf, static operation metadata, and decision caches scoped to a run; include mapper version, policy hash, normalized complete requirements, partition, Region, account, and resource identity in relevant keys.
-- [ ] Assemble the production pipeline so invalid authentication never maps, denied/unknown requests are audited before AWS-shaped response, allowed requests are audited before forwarding, and audit unavailability causes `audit_unavailable` with no upstream request.
-- [ ] Implement request/connection concurrency, bounded mapper timeouts, one shared credential provider, graceful drain/flush timeout, listener closure, child-group termination on fatal safety failure, and cleanup ordering.
-- [ ] Implement `init`, `run`, `policy validate`, `identity`, `audit`, and `version`; enforce mandatory `--`; print identity/bypass warning/startup, concise denials, and TTY exit summary while honoring quiet/verbose flags.
-- [ ] Add local metrics from Section 22 to `run.ended` and exit output without exposing an HTTP endpoint or credential/resource secrets.
-- [ ] Prove the final startup order: validate config/policy → resolve/preflight identity → create run secrets/CA → start audit and proxy → construct environment → launch child; any prerequisite failure leaves the child unexecuted.
+- [x] Implement all Section 14 event types and fields, append-only `0600` JSONL storage, schema versioning, configurable batch/decision fsync, bounded queue, flush, and writer-failure state.
+- [x] Centralize redaction for logs/audit/errors; remove authorization, proxy auth, tokens, keys, bodies, cookies, presigned signatures, raw environment, and default command arguments; support deterministic resource-name hashing.
+- [x] Add endpoint, leaf, static operation metadata, and decision caches scoped to a run; include mapper version, policy hash, normalized complete requirements, partition, Region, account, and resource identity in relevant keys.
+- [x] Assemble the production pipeline so invalid authentication never maps, denied/unknown requests are audited before AWS-shaped response, allowed requests are audited before forwarding, and audit unavailability causes `audit_unavailable` with no upstream request.
+- [x] Implement request/connection concurrency, bounded mapper timeouts, one shared credential provider, graceful drain/flush timeout, listener closure, child-group termination on fatal safety failure, and cleanup ordering.
+- [x] Implement `init`, `run`, `policy validate`, `identity`, `audit`, and `version`; enforce mandatory `--`; print identity/bypass warning/startup, concise denials, and TTY exit summary while honoring quiet/verbose flags.
+- [x] Add local metrics from Section 22 to `run.ended` and exit output without exposing an HTTP endpoint or credential/resource secrets.
+- [x] Prove the final startup order: validate config/policy → resolve/preflight identity → create run secrets/CA → start audit and proxy → construct environment → launch child; any prerequisite failure leaves the child unexecuted.
 
 Verification:
 - `go test -race ./internal/... ./test/integration -run 'Pipeline|Audit|CLI|Startup|Shutdown'`
