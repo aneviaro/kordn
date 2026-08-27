@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,7 +24,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kordn-ai/kordn/internal/audit"
+	"github.com/kordn-ai/kordn/internal/awserror"
 	"github.com/kordn-ai/kordn/internal/awsrequest"
+	"github.com/kordn-ai/kordn/internal/policy"
 	"github.com/kordn-ai/kordn/internal/runtime"
 )
 
@@ -545,6 +549,102 @@ func TestProxy_TunnelCancellationClosesBothDirections(t *testing.T) {
 		t.Fatal("tunnel did not stop after cancellation")
 	}
 }
+
+func TestProxy_PipelineDeniesBeforeResignOrForwardAndAudits(t *testing.T) {
+	const host = "sts.amazonaws.com"
+	endpoint := awsrequest.AWSEndpoint{Partition: "aws", Host: host, Service: "sts", Region: "us-east-1", Scope: awsrequest.ScopeRegional}
+	req := httptest.NewRequest(http.MethodPost, "https://"+host+"/", strings.NewReader("request body must not be logged"))
+	req.Host = host
+	decoded := &awsrequest.DecodedAWSRequest{
+		Partition:       "aws",
+		EndpointHost:    host,
+		Service:         "sts",
+		Region:          "us-east-1",
+		CallerAccountID: "123456789012",
+		Protocol:        awsrequest.ProtocolJSON11,
+		Operation:       "GetCallerIdentity",
+		Method:          http.MethodPost,
+		CanonicalPath:   "/",
+		Parameters:      map[string]awsrequest.Value{},
+		PayloadHashMode: awsrequest.PayloadHashEmpty,
+	}
+	mapping := &awsrequest.MappingResult{
+		Service:       "sts",
+		Operation:     "GetCallerIdentity",
+		MapperVersion: "test-mapper",
+		Confidence:    awsrequest.ConfidenceHigh,
+		Requirements:  []awsrequest.IAMRequirement{{Action: "sts:GetCallerIdentity", Resources: []string{"*"}, ScopeKind: awsrequest.ScopeKnownGlobal}},
+	}
+	verified := &awsrequest.VerifiedRequest{Request: req, Endpoint: endpoint, Protocol: awsrequest.ProtocolJSON11, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: endpoint.Region, SigningService: endpoint.Service, PayloadMode: awsrequest.PayloadHashEmpty}
+	var upstreamCalls atomic.Int32
+	collector := &pipelineAuditCollector{}
+	server, err := NewServer(Config{
+		Username: testUser, Password: testPassword, RunID: "run-pipeline",
+		InboundAuthenticator: pipelineAuthenticator{verified: verified},
+		Decoder:              pipelineDecoder{decoded: decoded},
+		Mapper:               pipelineMapper{mapping: mapping},
+		Policy:               pipelinePolicy{decision: policy.Decision{Result: policy.DecisionDeny, ReasonCode: awserror.ReasonPolicyNoMatchingAllow}},
+		Audit:                collector,
+		Upstream: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			upstreamCalls.Add(1)
+			return nil, errors.New("must not forward")
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	response := httptest.NewRecorder()
+	server.handlePipeline(response, req, destination{Host: host, Port: 443}, endpoint)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("pipeline status=%d, want 403", response.Code)
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatal("denied request reached upstream")
+	}
+	if len(collector.events) != 1 || collector.events[0].EventType != audit.RequestDecision {
+		t.Fatalf("audit events=%+v", collector.events)
+	}
+	if collector.events[0].Decision.Result != string(policy.DecisionDeny) {
+		t.Fatalf("audit decision=%+v", collector.events[0].Decision)
+	}
+}
+
+type pipelineAuthenticator struct{ verified *awsrequest.VerifiedRequest }
+
+func (a pipelineAuthenticator) Verify(context.Context, *http.Request, awsrequest.AWSEndpoint) (*awsrequest.VerifiedRequest, error) {
+	return a.verified, nil
+}
+
+type pipelineDecoder struct{ decoded *awsrequest.DecodedAWSRequest }
+
+func (d pipelineDecoder) Decode(context.Context, *awsrequest.VerifiedRequest, awsrequest.AWSEndpoint) (*awsrequest.DecodedAWSRequest, error) {
+	return d.decoded, nil
+}
+
+type pipelineMapper struct{ mapping *awsrequest.MappingResult }
+
+func (m pipelineMapper) Map(context.Context, *awsrequest.DecodedAWSRequest) (*awsrequest.MappingResult, error) {
+	return m.mapping, nil
+}
+
+type pipelinePolicy struct{ decision policy.Decision }
+
+func (p pipelinePolicy) Evaluate(context.Context, policy.DecisionInput) policy.Decision {
+	return p.decision
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type pipelineAuditCollector struct{ events []audit.Event }
+
+func (c *pipelineAuditCollector) Write(_ context.Context, event audit.Event) error {
+	c.events = append(c.events, event)
+	return nil
+}
+func (c *pipelineAuditCollector) Flush(context.Context) error { return nil }
 
 func newTestProxy(t *testing.T, config Config) *Server {
 	t.Helper()

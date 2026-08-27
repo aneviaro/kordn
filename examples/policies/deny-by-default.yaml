@@ -25,5 +25,6 @@ audit:
   path: ~/.kordn/audit/events.jsonl
   fsync: batch
   failureMode: deny
-  logResourceArns: true
-  hashResourceNames: false
+  # Audit is private by default: names are never emitted in clear text.
+  logResourceArns: false
+  hashResourceNames: true

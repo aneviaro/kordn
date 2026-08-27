@@ -4,176 +4,1279 @@
   "title": "Kordn audit event",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "event_id", "run_id", "timestamp", "event_type"],
+  "required": [
+    "schema_version",
+    "event_id",
+    "run_id",
+    "timestamp",
+    "event_type"
+  ],
   "properties": {
-    "schema_version": { "const": "kordn.audit/v1" },
-    "event_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "timestamp": { "type": "string", "format": "date-time" },
+    "schema_version": {
+      "const": "kordn.audit/v1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
     "event_type": {
       "enum": [
-        "run.started", "run.ended", "aws.request.decision",
-        "aws.request.forward_error", "proxy.authentication_failed",
-        "proxy.unsupported_request", "audit.writer_failed",
+        "run.started",
+        "run.ended",
+        "aws.request.decision",
+        "aws.request.forward_error",
+        "proxy.authentication_failed",
+        "proxy.unsupported_request",
+        "audit.writer_failed",
         "runtime.cleanup_failed"
       ]
     },
     "root_process": {
-      "type": "object", "additionalProperties": false,
-      "required": ["pid", "argv0", "command_hash"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "argv0",
+        "command_hash"
+      ],
       "properties": {
-        "pid": { "type": "integer", "minimum": 1 },
-        "argv0": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "command_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "argv0": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "command_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
       }
     },
-    "connection_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "connection_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
     "request": {
-      "type": "object", "additionalProperties": false,
-      "required": ["host", "partition", "service", "operation", "region", "protocol", "method", "payload_bytes"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "partition",
+        "service",
+        "operation",
+        "region",
+        "protocol",
+        "method",
+        "payload_bytes"
+      ],
       "properties": {
-        "host": { "type": "string", "minLength": 1, "maxLength": 255 },
-        "partition": { "type": "string", "minLength": 1, "maxLength": 32 },
-        "service": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "operation": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "region": { "type": "string", "maxLength": 64 },
-        "protocol": { "enum": ["json1.0", "json1.1", "query", "ec2-query", "rest-json", "rest-xml"] },
-        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] },
-        "payload_bytes": { "type": "integer", "minimum": 0, "maximum": 536870912 }
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "partition": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "protocol": {
+          "enum": [
+            "json1.0",
+            "json1.1",
+            "query",
+            "ec2-query",
+            "rest-json",
+            "rest-xml"
+          ]
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        "payload_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        }
       }
     },
     "iam_requirements": {
-      "type": "array", "minItems": 1, "maxItems": 1000,
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
       "items": {
-        "type": "object", "additionalProperties": false,
-        "required": ["action", "resources", "scope_kind", "dependent"],
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "resources",
+          "scope_kind",
+          "dependent"
+        ],
         "properties": {
-          "action": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^:\\s]+:[^:\\s]+$" },
-          "resources": {
-            "type": "array", "maxItems": 1000,
-            "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^:\\s]+:[^:\\s]+$"
           },
-          "scope_kind": { "enum": ["exact", "set", "known_global", "unresolved"] },
-          "dependent": { "type": "boolean" }
+          "resources": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "scope_kind": {
+            "enum": [
+              "exact",
+              "set",
+              "known_global",
+              "unresolved"
+            ]
+          },
+          "dependent": {
+            "type": "boolean"
+          }
         },
         "allOf": [
           {
-            "if": { "properties": { "scope_kind": { "const": "exact" } } },
-            "then": { "properties": { "resources": { "minItems": 1, "maxItems": 1 } } }
+            "if": {
+              "properties": {
+                "scope_kind": {
+                  "const": "exact"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              }
+            }
           },
           {
-            "if": { "properties": { "scope_kind": { "const": "set" } } },
-            "then": { "properties": { "resources": { "minItems": 1 } } }
+            "if": {
+              "properties": {
+                "scope_kind": {
+                  "const": "set"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "minItems": 1
+                }
+              }
+            }
           },
           {
-            "if": { "properties": { "scope_kind": { "const": "known_global" } } },
-            "then": { "properties": { "resources": { "minItems": 1, "maxItems": 1, "items": { "const": "*" } } } }
+            "if": {
+              "properties": {
+                "scope_kind": {
+                  "const": "known_global"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "const": "*"
+                  }
+                }
+              }
+            }
           }
         ]
       }
     },
     "mapping": {
-      "type": "object", "additionalProperties": false,
-      "required": ["confidence", "mapper_version"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confidence",
+        "mapper_version"
+      ],
       "properties": {
-        "confidence": { "enum": ["high", "medium", "low", "unknown", "unsupported"] },
-        "mapper_version": { "type": "string", "minLength": 1, "maxLength": 256 }
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "unknown",
+            "unsupported"
+          ]
+        },
+        "mapper_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
       }
     },
     "decision": {
-      "type": "object", "additionalProperties": false,
-      "required": ["result", "reason_code", "matched_rule_ids", "policy_hash"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "reason_code",
+        "matched_rule_ids",
+        "policy_hash"
+      ],
       "properties": {
-        "result": { "enum": ["allow", "deny"] },
+        "result": {
+          "enum": [
+            "allow",
+            "deny"
+          ]
+        },
         "reason_code": {
           "enum": [
-            "explicit_deny", "policy_no_matching_allow",
-            "aws_required_wildcard_not_approved", "unknown_endpoint",
-            "unsupported_partition", "unknown_operation", "mapping_low_confidence",
-            "resource_unresolved", "dependent_permission_unresolved",
-            "invalid_inbound_signature", "unsupported_signing_scheme",
-            "unsupported_payload_mode", "request_too_large", "audit_unavailable",
-            "upstream_credential_unavailable", "upstream_transport_error",
-            "internal_fail_closed", "all_requirements_allowed"
+            "explicit_deny",
+            "policy_no_matching_allow",
+            "aws_required_wildcard_not_approved",
+            "unknown_endpoint",
+            "unsupported_partition",
+            "unknown_operation",
+            "mapping_low_confidence",
+            "resource_unresolved",
+            "dependent_permission_unresolved",
+            "invalid_inbound_signature",
+            "unsupported_signing_scheme",
+            "unsupported_payload_mode",
+            "request_too_large",
+            "audit_unavailable",
+            "upstream_credential_unavailable",
+            "upstream_transport_error",
+            "internal_fail_closed",
+            "all_requirements_allowed"
           ]
         },
         "matched_rule_ids": {
-          "type": "array", "maxItems": 10000,
-          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         },
-        "policy_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "policy_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
       },
       "allOf": [
         {
           "if": {
-            "required": ["result"],
-            "properties": { "result": { "const": "allow" } }
+            "required": [
+              "result"
+            ],
+            "properties": {
+              "result": {
+                "const": "allow"
+              }
+            }
           },
           "then": {
-            "properties": { "reason_code": { "const": "all_requirements_allowed" } }
+            "properties": {
+              "reason_code": {
+                "const": "all_requirements_allowed"
+              }
+            }
           }
         },
         {
           "$comment": "Every stable reason other than all_requirements_allowed is a deny/failure reason; retain the closed enum above so new deny paths cannot become schema-only values.",
           "if": {
-            "required": ["result"],
-            "properties": { "result": { "const": "deny" } }
+            "required": [
+              "result"
+            ],
+            "properties": {
+              "result": {
+                "const": "deny"
+              }
+            }
           },
           "then": {
-            "properties": { "reason_code": { "not": { "const": "all_requirements_allowed" } } }
+            "properties": {
+              "reason_code": {
+                "not": {
+                  "const": "all_requirements_allowed"
+                }
+              }
+            }
           }
         }
       ]
     },
     "upstream": {
-      "type": "object", "additionalProperties": false,
-      "required": ["profile"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile"
+      ],
       "properties": {
-        "profile": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "principal_arn": { "type": "string", "maxLength": 2048 },
-        "http_status": { "type": "integer", "minimum": 100, "maximum": 599 },
-        "aws_request_id": { "type": "string", "maxLength": 256 }
+        "profile": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "principal_arn": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "http_status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "aws_request_id": {
+          "type": "string",
+          "maxLength": 256
+        }
       }
     },
     "timing_ms": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "decode": { "type": "number", "minimum": 0 },
-        "map": { "type": "number", "minimum": 0 },
-        "policy": { "type": "number", "minimum": 0 },
-        "local_total": { "type": "number", "minimum": 0 },
-        "upstream": { "type": "number", "minimum": 0 }
+        "decode": {
+          "type": "number",
+          "minimum": 0
+        },
+        "map": {
+          "type": "number",
+          "minimum": 0
+        },
+        "policy": {
+          "type": "number",
+          "minimum": 0
+        },
+        "local_total": {
+          "type": "number",
+          "minimum": 0
+        },
+        "upstream": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     },
-    "status": { "type": "string", "maxLength": 128 },
-    "error_code": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
-    "duration_ms": { "type": "number", "minimum": 0 }
+    "status": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "error_code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "exit_code": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    },
+    "duration_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counters",
+        "histograms",
+        "active_connections",
+        "peak_connections",
+        "active_requests",
+        "peak_requests"
+      ],
+      "properties": {
+        "counters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "histograms": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "p50_ms",
+              "p95_ms",
+              "p99_ms"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "p50_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "p95_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "p99_ms": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "active_connections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_connections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_requests": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "event_type": { "const": "aws.request.decision" } } },
-      "then": { "required": ["connection_id", "request", "iam_requirements", "mapping", "decision", "timing_ms"] }
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "aws.request.decision"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "connection_id",
+          "request",
+          "iam_requirements",
+          "mapping",
+          "decision",
+          "timing_ms"
+        ]
+      }
     },
     {
-      "if": { "properties": { "event_type": { "const": "aws.request.forward_error" } } },
-      "then": { "required": ["connection_id", "request", "error_code"] }
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "aws.request.forward_error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "connection_id",
+          "request",
+          "error_code"
+        ]
+      }
     },
     {
-      "if": { "properties": { "event_type": { "const": "proxy.authentication_failed" } } },
-      "then": { "required": ["connection_id", "error_code"] }
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "proxy.authentication_failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "connection_id",
+          "error_code"
+        ]
+      }
     },
     {
-      "if": { "properties": { "event_type": { "const": "proxy.unsupported_request" } } },
-      "then": { "required": ["connection_id", "error_code"] }
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "proxy.unsupported_request"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "connection_id",
+          "error_code"
+        ]
+      }
     },
     {
-      "if": { "properties": { "event_type": { "const": "audit.writer_failed" } } },
-      "then": { "required": ["error_code"] }
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "audit.writer_failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error_code"
+        ]
+      }
     },
     {
-      "if": { "properties": { "event_type": { "const": "runtime.cleanup_failed" } } },
-      "then": { "required": ["error_code"] }
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "runtime.cleanup_failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error_code"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "run.started"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "root_process",
+          "upstream"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "run.ended"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "root_process",
+          "status",
+          "exit_code",
+          "metrics"
+        ]
+      }
+    }
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "run.started"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "connection_id"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "error_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "timing_ms"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "run.ended"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "connection_id"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "error_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "timing_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "upstream"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "aws.request.decision"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "error_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "root_process"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "upstream"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "aws.request.forward_error"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "root_process"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "proxy.authentication_failed"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "root_process"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "timing_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "upstream"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "proxy.unsupported_request"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "root_process"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "timing_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "upstream"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "audit.writer_failed"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "connection_id"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "root_process"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "timing_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "upstream"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "event_type"
+      ],
+      "properties": {
+        "event_type": {
+          "const": "runtime.cleanup_failed"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "connection_id"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "decision"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "duration_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "exit_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "iam_requirements"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mapping"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "metrics"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "root_process"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "status"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "timing_ms"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "upstream"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

@@ -21,10 +21,19 @@ type entry[K comparable, V any] struct {
 // fixed after construction and an insertion evicts exactly one oldest entry
 // when the cache is full.
 type LRU[K comparable, V any] struct {
-	mu       sync.Mutex
-	capacity int
-	items    map[K]*list.Element
-	order    *list.List
+	mu                      sync.Mutex
+	capacity                int
+	items                   map[K]*list.Element
+	order                   *list.List
+	hits, misses, evictions uint64
+}
+
+type Stats struct {
+	Hits      uint64 `json:"hits"`
+	Misses    uint64 `json:"misses"`
+	Evictions uint64 `json:"evictions"`
+	Size      int    `json:"size"`
+	Capacity  int    `json:"capacity"`
 }
 
 // NewLRU creates a cache with a positive bounded capacity.
@@ -59,9 +68,11 @@ func (c *LRU[K, V]) Get(key K) (V, bool) {
 	defer c.mu.Unlock()
 	item, ok := c.items[key]
 	if !ok {
+		c.misses++
 		var zero V
 		return zero, false
 	}
+	c.hits++
 	c.order.MoveToFront(item)
 	return item.Value.(entry[K, V]).value, true
 }
@@ -92,6 +103,7 @@ func (c *LRU[K, V]) Add(key K, value V) (replaced bool, evicted bool) {
 	old := oldest.Value.(entry[K, V])
 	delete(c.items, old.key)
 	c.order.Remove(oldest)
+	c.evictions++
 	return false, true
 }
 
@@ -133,6 +145,15 @@ func (c *LRU[K, V]) Capacity() int {
 }
 
 // Clear removes all values.  It does not call user code.
+func (c *LRU[K, V]) Stats() Stats {
+	if c == nil {
+		return Stats{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return Stats{Hits: c.hits, Misses: c.misses, Evictions: c.evictions, Size: len(c.items), Capacity: c.capacity}
+}
+
 func (c *LRU[K, V]) Clear() {
 	if c == nil {
 		return
