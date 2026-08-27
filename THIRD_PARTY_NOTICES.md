@@ -10,8 +10,13 @@ I am using the iamlive revision recorded in
 `third_party/iamlive/UPSTREAM_COMMIT`. iamlive is MIT-licensed by Ian Mckay.
 The exact MIT text is retained at `third_party/iamlive/LICENSE`, and the
 upstream dependency notice is retained at `third_party/iamlive/NOTICE`.
-No iamlive source is copied into this task; the package remains an integration
-boundary only.
+Only the minimal derived operation/action and dependent-action mapper under
+`third_party/iamlive/source/` is included. Its explicit operation table is
+narrowed to Kordn's reviewed support matrix, and its typed request-value
+adaptation and fail-closed cross-checks are Kordn-specific; exact upstream
+revision, path, symbols, and derivation are recorded in
+`third_party/iamlive/PROVENANCE.md`. No upstream runtime, proxy, or credential
+code is included.
 
 ## AWS SDK for Go v2 and Smithy Go — Apache-2.0
 

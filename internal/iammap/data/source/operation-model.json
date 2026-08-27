@@ -1,0 +1,220 @@
+{
+  "version": "supported-operations/v1",
+  "description": "Explicit fail-closed nine-service support matrix; not an AWS catalog claim. Entries combine pinned iamlive operation evidence with SAR metadata.",
+  "entries": [
+    {
+      "service": "ec2",
+      "operation": "DescribeInstances",
+      "action": "ec2:DescribeInstances",
+      "resource": "global",
+      "scope": "known_global"
+    },
+    {
+      "service": "ec2",
+      "operation": "RunInstances",
+      "action": "ec2:RunInstances",
+      "resource": "instance",
+      "scope": "set",
+      "dependencies": [
+        "iam:PassRole"
+      ]
+    },
+    {
+      "service": "ec2",
+      "operation": "TerminateInstances",
+      "action": "ec2:TerminateInstances",
+      "resource": "instance",
+      "scope": "set"
+    },
+    {
+      "service": "ecs",
+      "operation": "CreateService",
+      "action": "ecs:CreateService",
+      "resource": "service",
+      "scope": "exact",
+      "dependencies": [
+        "iam:PassRole"
+      ]
+    },
+    {
+      "service": "ecs",
+      "operation": "DescribeServices",
+      "action": "ecs:DescribeServices",
+      "resource": "service",
+      "scope": "exact"
+    },
+    {
+      "service": "ecs",
+      "operation": "RunTask",
+      "action": "ecs:RunTask",
+      "resource": "task-definition",
+      "scope": "exact",
+      "dependencies": [
+        "iam:PassRole"
+      ]
+    },
+    {
+      "service": "ecs",
+      "operation": "UpdateService",
+      "action": "ecs:UpdateService",
+      "resource": "service",
+      "scope": "exact",
+      "dependencies": [
+        "iam:PassRole"
+      ]
+    },
+    {
+      "service": "sts",
+      "operation": "AssumeRole",
+      "action": "sts:AssumeRole",
+      "resource": "role",
+      "scope": "exact"
+    },
+    {
+      "service": "sts",
+      "operation": "GetCallerIdentity",
+      "action": "sts:GetCallerIdentity",
+      "resource": "global",
+      "scope": "known_global"
+    },
+    {
+      "service": "s3",
+      "operation": "DeleteObject",
+      "action": "s3:DeleteObject",
+      "resource": "object",
+      "scope": "exact"
+    },
+    {
+      "service": "s3",
+      "operation": "GetBucketLocation",
+      "action": "s3:GetBucketLocation",
+      "resource": "bucket",
+      "scope": "exact"
+    },
+    {
+      "service": "s3",
+      "operation": "GetObject",
+      "action": "s3:GetObject",
+      "resource": "object",
+      "scope": "exact"
+    },
+    {
+      "service": "s3",
+      "operation": "ListObjectsV2",
+      "action": "s3:ListBucket",
+      "resource": "bucket",
+      "scope": "exact"
+    },
+    {
+      "service": "s3",
+      "operation": "PutObject",
+      "action": "s3:PutObject",
+      "resource": "object",
+      "scope": "exact"
+    },
+    {
+      "service": "cloudwatch",
+      "operation": "GetMetricData",
+      "action": "cloudwatch:GetMetricData",
+      "resource": "dataset",
+      "scope": "exact"
+    },
+    {
+      "service": "cloudwatch",
+      "operation": "PutMetricData",
+      "action": "cloudwatch:PutMetricData",
+      "resource": "dataset",
+      "scope": "exact"
+    },
+    {
+      "service": "logs",
+      "operation": "CreateLogGroup",
+      "action": "logs:CreateLogGroup",
+      "resource": "log-group",
+      "scope": "exact"
+    },
+    {
+      "service": "logs",
+      "operation": "CreateLogStream",
+      "action": "logs:CreateLogStream",
+      "resource": "log-stream",
+      "scope": "exact"
+    },
+    {
+      "service": "logs",
+      "operation": "PutLogEvents",
+      "action": "logs:PutLogEvents",
+      "resource": "log-stream",
+      "scope": "exact"
+    },
+    {
+      "service": "iam",
+      "operation": "CreateRole",
+      "action": "iam:CreateRole",
+      "resource": "role",
+      "scope": "exact"
+    },
+    {
+      "service": "iam",
+      "operation": "GetRole",
+      "action": "iam:GetRole",
+      "resource": "role",
+      "scope": "exact"
+    },
+    {
+      "service": "lambda",
+      "operation": "CreateFunction",
+      "action": "lambda:CreateFunction",
+      "resource": "function",
+      "scope": "exact",
+      "dependencies": [
+        "iam:PassRole"
+      ]
+    },
+    {
+      "service": "lambda",
+      "operation": "Invoke",
+      "action": "lambda:InvokeFunction",
+      "resource": "function",
+      "scope": "exact"
+    },
+    {
+      "service": "lambda",
+      "operation": "UpdateFunctionConfiguration",
+      "action": "lambda:UpdateFunctionConfiguration",
+      "resource": "function",
+      "scope": "exact",
+      "dependencies": [
+        "iam:PassRole"
+      ]
+    },
+    {
+      "service": "dynamodb",
+      "operation": "DeleteItem",
+      "action": "dynamodb:DeleteItem",
+      "resource": "table",
+      "scope": "exact"
+    },
+    {
+      "service": "dynamodb",
+      "operation": "DescribeTable",
+      "action": "dynamodb:DescribeTable",
+      "resource": "table",
+      "scope": "exact"
+    },
+    {
+      "service": "dynamodb",
+      "operation": "GetItem",
+      "action": "dynamodb:GetItem",
+      "resource": "table",
+      "scope": "exact"
+    },
+    {
+      "service": "dynamodb",
+      "operation": "PutItem",
+      "action": "dynamodb:PutItem",
+      "resource": "table",
+      "scope": "exact"
+    }
+  ]
+}
