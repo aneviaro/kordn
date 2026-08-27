@@ -188,6 +188,75 @@ type TransportConfig struct {
 	RootCAs     *x509.CertPool
 }
 
+// NoReplayRoundTripper prevents net/http from rewinding and replaying a
+// request after an ambiguous connection failure. It deliberately accepts only
+// *http.Transport: an arbitrary RoundTripper can implement its own retry
+// policy, which this boundary cannot inspect or disable.
+//
+// The constructor clones and hardens the supplied transport. Keep-alives are
+// disabled, HTTP/2 is disabled through both transport protocol controls, and
+// the clone has no inherited idle-connection pool. Consequently every request
+// starts on a fresh HTTP/1.1 connection and net/http's reused-connection retry
+// path cannot run after application bytes may have been written.
+type NoReplayRoundTripper struct {
+	Base http.RoundTripper
+	// unsafe is set when a caller constructs this type directly with an
+	// arbitrary RoundTripper. Such a value must fail closed rather than
+	// silently provide a weaker no-replay guarantee.
+	unsafe bool
+}
+
+func (t NoReplayRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.unsafe || !noReplayTransport(t.Base) || req == nil {
+		return nil, errors.New("outbound transport is unavailable")
+	}
+	oneShot := req.Clone(req.Context())
+	// This also prevents a future change from making the request body
+	// rewindable. The transport's fresh-connection invariant is the primary
+	// guarantee, including for bodyless replayable methods.
+	oneShot.GetBody = nil
+	return t.Base.RoundTrip(oneShot)
+}
+
+func noReplayTransport(base http.RoundTripper) bool {
+	transport, ok := base.(*http.Transport)
+	if !ok || transport == nil || !transport.DisableKeepAlives || transport.ForceAttemptHTTP2 || transport.TLSNextProto == nil {
+		return false
+	}
+	if transport.TLSNextProto["h2"] != nil {
+		return false
+	}
+	return transport.Protocols == nil || (!transport.Protocols.HTTP2() && !transport.Protocols.UnencryptedHTTP2())
+}
+
+func hardenedNoReplayTransport(base *http.Transport) *http.Transport {
+	transport := base.Clone()
+	transport.DisableKeepAlives = true
+	transport.ForceAttemptHTTP2 = false
+	// A non-nil empty TLSNextProto map is the documented HTTP/2-off setting.
+	// Protocols is also set because it takes precedence over TLSNextProto in
+	// current Go releases and must not permit a caller's HTTP/2 preference.
+	transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	transport.Protocols = &http.Protocols{}
+	transport.Protocols.SetHTTP1(true)
+	transport.Protocols.SetHTTP2(false)
+	transport.Protocols.SetUnencryptedHTTP2(false)
+	return transport
+}
+
+// NewNoReplayRoundTripper wraps an explicit public-PKI transport for the
+// request path that has already passed SigV4 verification and policy. Unsafe
+// or arbitrary bases are represented by a fail-closed RoundTripper. It is a
+// RoundTripper rather than an http.Client so callers retain streaming response
+// bodies and caller-owned redirect policy.
+func NewNoReplayRoundTripper(base http.RoundTripper) http.RoundTripper {
+	transport, ok := base.(*http.Transport)
+	if !ok || transport == nil {
+		return NoReplayRoundTripper{Base: base, unsafe: true}
+	}
+	return NoReplayRoundTripper{Base: hardenedNoReplayTransport(transport)}
+}
+
 // NewOutboundTransport creates a separate public-PKI transport. If a parent
 // proxy is present it is used explicitly; otherwise direct target dialing is
 // pinned to the validated DNS answer set by the caller's request path.
@@ -198,7 +267,17 @@ func NewOutboundTransport(settings runtime.CapturedProxySettings, options ...Tra
 		config.ParentProxy = settings
 	}
 	transport := settings.NewOutboundTransport()
+	// This transport is also used for Kordn's signed upstream path. Keep every
+	// request on a fresh HTTP/1.1 connection so net/http cannot retry a reused
+	// connection after an ambiguous application write. Configure both protocol
+	// controls: TLSNextProto alone is not sufficient when Protocols is set.
+	transport.DisableKeepAlives = true
 	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	transport.Protocols = &http.Protocols{}
+	transport.Protocols.SetHTTP1(true)
+	transport.Protocols.SetHTTP2(false)
+	transport.Protocols.SetUnencryptedHTTP2(false)
 	if config.Dialer != nil {
 		transport.DialContext = config.Dialer.DialContext
 	}

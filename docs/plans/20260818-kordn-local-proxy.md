@@ -230,13 +230,13 @@ Files:
 - Create: `test/integration/fakeaws/sigv4.go`, `test/integration/resign_test.go` — known-key signature-validating upstream and fake-material leak assertions.
 
 Steps:
-- [ ] Parse and validate fake access key, session token, credential date/Region/service/terminator, signed-header presence, request time, canonical URI/query/headers, payload mode/hash, and final HMAC in constant-time-sensitive comparisons.
-- [ ] Cross-check signing service and Region against endpoint classification, including explicitly modeled global rules; classify malformed credentials separately from unsupported signing modes.
-- [ ] Reject SigV4a, query presigning, streaming chunks, event streams, anonymous/unrecognized auth, timestamps outside skew, unsupported payload modes, and oversized requests before mapping or upstream I/O.
-- [ ] Implement bounded memory buffering and private `0600` spooling with early unlink where supported; allow unchanged streaming only for explicitly modeled `UNSIGNED-PAYLOAD` or precomputed hashes.
-- [ ] For allowed-ready requests, remove inbound authorization/token/query signing and proxy/hop-by-hop headers, preserve semantic method/target/parameters/body, refresh date/token, and sign with the current memoized upstream credential via AWS SDK v2 primitives.
-- [ ] Forward only to the original recognized AWS hostname with public PKI validation, stream responses, preserve AWS bodies/request IDs, and retry only connection establishment proven to have sent no application bytes.
-- [ ] Assert the upstream fixture accepts the new signature and never observes fake access key, token, authorization, proxy auth, or identity-altering forwarding headers.
+- [x] Parse and validate fake access key, session token, credential date/Region/service/terminator, signed-header presence, request time, canonical URI/query/headers, payload mode/hash, and final HMAC in constant-time-sensitive comparisons.
+- [x] Cross-check signing service and Region against endpoint classification, including explicitly modeled global rules; classify malformed credentials separately from unsupported signing modes.
+- [x] Reject SigV4a, query presigning, streaming chunks, event streams, anonymous/unrecognized auth, timestamps outside skew, unsupported payload modes, and oversized requests before mapping or upstream I/O.
+- [x] Implement bounded memory buffering and private `0600` spooling with early unlink where supported; allow unchanged streaming only for explicitly modeled `UNSIGNED-PAYLOAD` or precomputed hashes.
+- [x] For allowed-ready requests, remove inbound authorization/token/query signing and proxy/hop-by-hop headers, preserve semantic method/target/parameters/body, refresh date/token, and sign with the current memoized upstream credential via AWS SDK v2 primitives.
+- [x] Forward only to the original recognized AWS hostname with public PKI validation, stream responses, preserve AWS bodies/request IDs, and retry only connection establishment proven to have sent no application bytes.
+- [x] Assert the upstream fixture accepts the new signature and never observes fake access key, token, authorization, proxy auth, or identity-altering forwarding headers.
 
 Verification:
 - `go test -race ./internal/sigv4 ./internal/proxy ./test/integration -run 'SigV4|Resign|Payload'`
