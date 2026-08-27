@@ -245,12 +245,14 @@ type MappingEvidence struct {
 // MappingResult is the complete mapper output. Requirements are a conjunction
 // and every one must be approved by the policy engine.
 type MappingResult struct {
-	Service       string            `json:"service"`
-	Operation     string            `json:"operation"`
-	Requirements  []IAMRequirement  `json:"requirements"`
-	MapperVersion string            `json:"mapper_version"`
-	Confidence    MappingConfidence `json:"confidence"`
-	Evidence      []MappingEvidence `json:"evidence"`
+	Service                  string            `json:"service"`
+	Operation                string            `json:"operation"`
+	Requirements             []IAMRequirement  `json:"requirements"`
+	MapperVersion            string            `json:"mapper_version"`
+	IamLiveVersion           string            `json:"iamlive_version,omitempty"`
+	AuthorizationDataVersion string            `json:"authorization_data_version,omitempty"`
+	Confidence               MappingConfidence `json:"confidence"`
+	Evidence                 []MappingEvidence `json:"evidence"`
 }
 
 func (m MappingResult) Validate() error {
@@ -300,6 +302,9 @@ type DecodedAWSRequest struct {
 }
 
 func (r DecodedAWSRequest) Validate() error {
+	if err := validateCallerAccountID(r.CallerAccountID); err != nil {
+		return fmt.Errorf("caller account ID: %w", err)
+	}
 	if strings.TrimSpace(r.Partition) == "" || strings.TrimSpace(r.EndpointHost) == "" || strings.TrimSpace(r.Service) == "" || strings.TrimSpace(r.Operation) == "" {
 		return errors.New("decoded request endpoint, service, and operation are required")
 	}

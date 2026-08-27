@@ -1,0 +1,87 @@
+{
+  "snapshot_version": "aws-sar-nine-service-2026-08-27",
+  "retrieval_date": "2026-08-27",
+  "catalog_url": "https://servicereference.us-east-1.amazonaws.com/v1/service-list.json",
+  "mapping_url": "https://servicereference.us-east-1.amazonaws.com/v1/mapping.json",
+  "files": [
+
+    {
+        "path": "service-list.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/service-list.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "a70d40161fbb37e7d326059915d43d2b5b00496bc4843a0224fdb2bdc818180f",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "mapping.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/mapping.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "4d1064f6a82eb904b4b11f35ce4461d9853fc83c14bd21e32d0d42a806906989",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "ec2.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/ec2/ec2.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "d6817ade44ff2a096fb9bfb887259cf4a5eca2b3623fccd286c2c9459636f416",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "ecs.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/ecs/ecs.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "1993cb0b5a2e448f651096b878d54e80dc53380b5bd1182a6247dca07d025f92",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "sts.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/sts/sts.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "fdde2cc1fd6f0b2a924902f39eec3714b9fedced21ec587e753e3cc2dde74a44",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "s3.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/s3/s3.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "3b21de4e8a34a1b730c94c360682bc408dd084cf2d67f8e9bd509163c1b0b67f",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "cloudwatch.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/cloudwatch/cloudwatch.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "611f0a8c388b4d164fcbb8bdf8ed6aba5938da3d0a5dc650a247c8abb3edd0cf",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "logs.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/logs/logs.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "09bdf66e7cb51f55cd876dfc10258ede7018f5ceda322fcaef0bb66fe19b8ee8",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "iam.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/iam/iam.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "0cc573ce2dec7e2122845c45961e9fa3448ef76d364fb800db98292e0e3d6d61",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "lambda.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/lambda/lambda.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "6b753c08ed6917084a9cacfa67b624fd93b062a37dd3639477fc10b8254fde80",
+        "format": "official-aws-service-reference"
+    },
+    {
+        "path": "dynamodb.json",
+        "url": "https://servicereference.us-east-1.amazonaws.com/v1/dynamodb/dynamodb.json",
+        "retrieval_date": "2026-08-27",
+        "sha256": "d71a8b607418436853265cb4931470e1c31bd23867eba0f3cb2f9cfeee9b7e2e",
+        "format": "official-aws-service-reference"
+    }
+
+  ]
+}

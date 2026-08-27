@@ -267,13 +267,13 @@ Files:
 - Modify: `THIRD_PARTY_NOTICES.md`, `third_party/iamlive/*` — final copied/imported dependency notices and exact revision.
 
 Steps:
-- [ ] Decode operation and only the bounded request parameters needed for mapping for all required protocols, retaining typed evidence and rejecting malformed, duplicate, conflicting, or over-limit values.
-- [ ] Require independent endpoint/scope/protocol evidence to agree on service, operation, Region, and partition; return no mapping when they disagree.
-- [ ] Implement the ADR-selected iamlive adapter behind `IAMMapper`, contain panics/timeouts, normalize canonical IAM action spelling, and expose mapper/iamlive/data versions in every result.
-- [ ] Pin the AWS machine-readable Service Authorization Reference snapshot at build time, document/generate it reproducibly, forbid runtime metadata fetches, and add a diff gate that flags newly globalized or broadened mappings.
-- [ ] Extract and validate exact ARN or finite ARN sets with partition/Region/account context; emit `known_global` only from authoritative action metadata and `unresolved` for incomplete request-specific scope.
-- [ ] Return every modeled IAM action and conditional dependency, including at least one request-aware `iam:PassRole` case; unresolved applicability fails closed rather than omitting the dependency.
-- [ ] Add golden fixtures for representative EC2, ECS, STS, S3, CloudWatch, CloudWatch Logs, IAM, Lambda, and DynamoDB requests plus unknown/stale/malformed/panic/timeout cases.
+- [x] Decode operation and only the bounded request parameters needed for mapping for all required protocols, retaining typed evidence and rejecting malformed, duplicate, conflicting, or over-limit values.
+- [x] Require independent endpoint/scope/protocol evidence to agree on service, operation, Region, and partition; return no mapping when they disagree.
+- [x] Implement the ADR-selected iamlive adapter behind `IAMMapper`, contain panics/timeouts, normalize canonical IAM action spelling, and expose mapper/iamlive/data versions in every result.
+- [x] Pin the AWS machine-readable Service Authorization Reference snapshot at build time, document/generate it reproducibly, forbid runtime metadata fetches, and add a diff gate that flags newly globalized or broadened mappings.
+- [x] Extract and validate exact ARN or finite ARN sets with partition/Region/account context; emit `known_global` only from authoritative action metadata and `unresolved` for incomplete request-specific scope.
+- [x] Return every modeled IAM action and conditional dependency, including at least one request-aware `iam:PassRole` case; unresolved applicability fails closed rather than omitting the dependency.
+- [x] Add golden fixtures for representative EC2, ECS, STS, S3, CloudWatch, CloudWatch Logs, IAM, Lambda, and DynamoDB requests plus unknown/stale/malformed/panic/timeout cases.
 
 Verification:
 - `go test -race ./internal/awsrequest ./internal/iammap`
