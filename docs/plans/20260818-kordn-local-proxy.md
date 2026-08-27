@@ -303,13 +303,13 @@ Files:
 - Create: `internal/awserror/encode_test.go` — protocol headers/body/status and secret-leak fixtures.
 
 Steps:
-- [ ] Implement one bounded glob matcher used by action/resource rules with the specified case semantics and exact Region/account/partition constraints.
-- [ ] Reject non-high confidence and unresolved requirements first; evaluate every requirement/resource combination without rule-order dependence; apply explicit deny precedence and require positive allow coverage for all combinations.
-- [ ] Require explicit known-global wildcard acknowledgement and ensure an allow for one resource, dependency, Region, account, or partition cannot cover another through cache-key or normalization mistakes.
-- [ ] Canonically sort requirement/rule output for stable hashes, decision cache keys, events, and tests without making rule order meaningful.
-- [ ] Encode local HTTP 403 responses for AWS JSON 1.0/1.1, REST-JSON, Query/EC2 Query, and REST-XML/S3 with only service, operation, reason code, and opaque event ID.
-- [ ] Preserve the distinction between local deny, upstream access denied, and upstream error, and ensure policy denials themselves do not force Kordn's process exit status.
-- [ ] Add property/fuzz tests for rule-order invariance, deny dominance, complete requirement coverage, wildcard acknowledgement, and response parseability by representative clients.
+- [x] Implement one bounded glob matcher used by action/resource rules with the specified case semantics and exact Region/account/partition constraints.
+- [x] Reject non-high confidence and unresolved requirements first; evaluate every requirement/resource combination without rule-order dependence; apply explicit deny precedence and require positive allow coverage for all combinations.
+- [x] Require explicit known-global wildcard acknowledgement and ensure an allow for one resource, dependency, Region, account, or partition cannot cover another through cache-key or normalization mistakes.
+- [x] Canonically sort requirement/rule output for stable hashes, decision cache keys, events, and tests without making rule order meaningful.
+- [x] Encode local HTTP 403 responses for AWS JSON 1.0/1.1, REST-JSON, Query/EC2 Query, and REST-XML/S3 with only service, operation, reason code, and opaque event ID.
+- [x] Preserve the distinction between local deny, upstream access denied, and upstream error, and ensure policy denials themselves do not force Kordn's process exit status.
+- [x] Add property/fuzz tests for rule-order invariance, deny dominance, complete requirement coverage, wildcard acknowledgement, and response parseability by representative clients.
 
 Verification:
 - `go test -race ./internal/policy ./internal/awserror`
