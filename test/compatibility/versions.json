@@ -1,0 +1,11 @@
+{
+  "awscli": "2.27.50",
+  "terraform": "1.12.2",
+  "terraform_aws_provider": "6.0.0",
+  "python": "3.12",
+  "boto3": "1.39.9",
+  "botocore": "1.39.9",
+  "claude_code": "2.0.0",
+  "codex": "0.1.250",
+  "go": "1.26.4"
+}

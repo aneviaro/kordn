@@ -7,19 +7,38 @@ on:
 permissions:
   contents: read
 
+env:
+  GO_VERSION: '1.26.4'
+  AWSCLI_VERSION: '2.27.50'
+  TERRAFORM_VERSION: '1.12.2'
+  AWS_PROVIDER_VERSION: '6.0.0'
+  PYTHON_VERSION: '3.12'
+  BOTO3_VERSION: '1.39.9'
+  CLAUDE_VERSION: '2.0.0'
+  CODEX_VERSION: '0.1.250'
+
 jobs:
-  verify:
+  pure:
+    name: pure-${{ matrix.os }}-${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - { os: ubuntu-latest, arch: amd64, goarch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64, goarch: arm64 }
+          - { os: macos-13, arch: amd64, goarch: amd64 }
+          - { os: macos-14, arch: arm64, goarch: arm64 }
     runs-on: ${{ matrix.os }}
+    env:
+      GOARCH: ${{ matrix.goarch }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: .go-version
+          go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.goarch == 'amd64' && 'x86_64' || 'arm64' }}"
       - name: Format
         run: make fmt-check
       - name: Vet
@@ -28,7 +47,90 @@ jobs:
         run: make test
       - name: Race tests
         run: make test-race
+      - name: Compatibility integration
+        run: make test-compatibility
       - name: License gate
         run: make license-check
+      - name: Schema gate
+        run: make schema-check
       - name: Build
         run: make build
+
+  external:
+    name: external-${{ matrix.name }}
+    needs: pure
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-amd64-claude, os: ubuntu-latest, arch: amd64, goarch: amd64, aws_arch: x86_64, agent: claude }
+          - { name: linux-amd64-codex, os: ubuntu-latest, arch: amd64, goarch: amd64, aws_arch: x86_64, agent: codex }
+          - { name: macos-arm64-claude, os: macos-14, arch: arm64, goarch: arm64, aws_arch: aarch64, agent: claude }
+          - { name: macos-arm64-codex, os: macos-14, arch: arm64, goarch: arm64, aws_arch: aarch64, agent: codex }
+    runs-on: ${{ matrix.os }}
+    env:
+      GOARCH: ${{ matrix.goarch }}
+      KORDN_EXTERNAL_REQUIRED: '1'
+      KORDN_EXTERNAL_TESTS: '1'
+      KORDN_BOTO_LONG_RUN: '1'
+      KORDN_AGENT: ${{ matrix.agent }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+      - name: Install exact AWS CLI v2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ "$(uname -s)" = Linux ]; then
+            curl --fail --location "https://awscli.amazonaws.com/AWSCLIV2-${AWSCLI_VERSION}.zip" -o /tmp/aws.zip
+            unzip -q /tmp/aws.zip -d /tmp/awscli
+            sudo /tmp/awscli/aws/install --update
+          else
+            curl --fail --location "https://awscli.amazonaws.com/AWSCLIV2-${AWSCLI_VERSION}.pkg" -o /tmp/AWSCLIV2.pkg
+            sudo installer -pkg /tmp/AWSCLIV2.pkg -target /
+          fi
+          aws --version | grep -F "${AWSCLI_VERSION}"
+      - name: Install exact Terraform and provider mirror
+        shell: bash
+        run: |
+          set -euxo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) tf_arch=amd64; tf_os=linux;;
+            Darwin-arm64) tf_arch=arm64; tf_os=darwin;;
+            *) echo "unsupported external runner" >&2; exit 1;;
+          esac
+          curl --fail --location "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_${tf_os}_${tf_arch}.zip" -o /tmp/terraform.zip
+          unzip -qo /tmp/terraform.zip -d /tmp/bin
+          sudo install /tmp/bin/terraform /usr/local/bin/terraform
+          terraform version | grep -F "v${TERRAFORM_VERSION}"
+          mkdir -p "$RUNNER_TEMP/provider-mirror/registry.terraform.io/hashicorp/aws/${AWS_PROVIDER_VERSION}/${tf_os}_${tf_arch}"
+          curl --fail --location "https://releases.hashicorp.com/terraform-provider-aws/${AWS_PROVIDER_VERSION}/terraform-provider-aws_${AWS_PROVIDER_VERSION}_${tf_os}_${tf_arch}.zip" -o /tmp/provider.zip
+          unzip -qo /tmp/provider.zip -d "$RUNNER_TEMP/provider-mirror/registry.terraform.io/hashicorp/aws/${AWS_PROVIDER_VERSION}/${tf_os}_${tf_arch}"
+          echo "KORDN_TERRAFORM_MIRROR=$RUNNER_TEMP/provider-mirror" >> "$GITHUB_ENV"
+      - name: Install exact Python and boto
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python3 -m pip install "boto3==${BOTO3_VERSION}" "botocore==${BOTO3_VERSION}"
+      - name: Verify boto versions and imports
+        run: |
+          python3 - <<'PY'
+          import os
+
+          import boto3
+          import botocore
+
+          expected = os.environ["BOTO3_VERSION"]
+          assert boto3.__version__ == expected, boto3.__version__
+          assert botocore.__version__ == expected, botocore.__version__
+          PY
+      - name: Install exact Claude and Codex producers
+        run: |
+          npm install --global "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "@openai/codex@${CODEX_VERSION}"
+          claude --version
+          codex --version
+      - name: Required external producer gate
+        run: make test-external

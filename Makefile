@@ -2,7 +2,7 @@ GO ?= go
 BINARY ?= bin/kordn
 GO_FILES := $(shell find cmd internal test -type f -name '*.go' 2>/dev/null)
 
-.PHONY: all fmt fmt-check lint test test-race license-check schema-check build test-integration ci clean
+.PHONY: all fmt fmt-check lint test test-race license license-check schema schema-check build test-integration compatibility-check test-compatibility test-external build-matrix ci clean
 
 all: build
 
@@ -26,11 +26,15 @@ test-race:
 # temporary Go program. The test also runs Config.Load's pinned semantic phase
 # for invariants JSON Schema cannot express (such as unique rule IDs and
 # cross-field body bounds).
+schema: schema-check
+
 schema-check:
 	$(GO) test ./internal/config -run '^TestSchemaCheck$$' -count=1
 
 # This gate deliberately enumerates every approved module. A new dependency
 # requires a reviewed license and a notice before it can enter the build.
+license: license-check
+
 license-check:
 	@set -eu; \
 	modules="$$($(GO) list -m -f '{{.Path}}@{{.Version}}' all)"; \
@@ -89,9 +93,26 @@ build:
 	$(GO) build -o $(BINARY) ./cmd/kordn
 
 test-integration:
-	$(GO) test -race ./test/integration
+	$(GO) test -race ./test/integration/...
 
-ci: fmt-check lint test-race license-check schema-check build
+compatibility-check:
+	$(GO) test -tags compat ./test/compatibility -run '^TestVersionMatrixAndDocumentation$$' -count=1
+
+test-compatibility: compatibility-check
+	$(GO) test -race -tags compat ./test/compatibility
+
+# External producer tests are deliberately opt-in. Required mode fails closed
+# when an exact binary, provider mirror, or agent producer is absent.
+test-external:
+	KORDN_EXTERNAL_REQUIRED=1 KORDN_EXTERNAL_TESTS=1 $(GO) test -race -tags compat ./test/compatibility
+
+build-matrix:
+	@set -eu; for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
+		os=$${target%/*}; arch=$${target#*/}; out=$$(mktemp -t kordn-build.XXXXXX); \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build -o $$out ./cmd/kordn; rm -f $$out; \
+	done
+
+ci: fmt-check lint test-race license-check schema-check build test-compatibility
 
 clean:
 	rm -rf bin coverage.out
