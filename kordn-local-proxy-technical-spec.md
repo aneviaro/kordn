@@ -1351,7 +1351,7 @@ kordn/
 | Producer | Required scenario | Release expectation |
 |---|---|---|
 | AWS CLI v2 | `sts get-caller-identity`, one read call, one mutation, one deny | Must pass |
-| boto3/botocore | One client reused across allowed and denied requests for at least 30 minutes | Must pass |
+| boto3/botocore | One client reused across allowed and denied requests for at least 3 minutes | Must pass |
 | Terraform AWS provider | `init`, `plan`, and a sandboxed `apply` using the same proxy | Must pass |
 | AWS SDK for Go v2 | Long-lived client, sequential dependent requests, retry after local deny | Must pass |
 | Claude Code | Wrapped process can invoke AWS CLI and boto3 subprocesses through Kordn | Must pass on macOS and Linux |

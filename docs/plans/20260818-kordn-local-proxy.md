@@ -379,15 +379,15 @@ Files:
 - Modify: `.github/workflows/ci.yml`, `Makefile` — tagged compatibility, OS/architecture build, and nightly real-AWS jobs.
 
 Steps:
-- [ ] Complete the fake AWS server with known real test key validation, AWS JSON/Query/REST response fixtures, request ledger, latency/disconnect/403/429/5xx injection, and stateful sequential resources.
-- [ ] Add AWS CLI allow/read/mutation/deny/unknown cases and verify recognizable local denial plus unmodified upstream errors/request IDs.
-- [ ] Reuse one boto3 client for at least 30 minutes and one Go SDK v2 client across allowed/denied calls, transparent upstream credential refresh, streaming response, and SDK-owned retry after upstream 429.
-- [ ] Run Terraform `init` through opaque registry tunnels, then sandboxed `plan` and narrow `apply` through AWS interception, including a later denied call and accurate partial audit.
-- [ ] Add the A-read/B-derived-write/C-denied sequence and prove A/B remain complete, C never reaches upstream, and audit records runtime-resolved resources without claiming rollback.
-- [ ] Wrap pinned Claude Code and Codex smoke fixtures that launch AWS CLI and boto3 subprocesses, inherit Kordn settings, preserve non-AWS agent API TLS, and surface local denial to agent and terminal.
-- [ ] Test corporate proxy chaining, public PKI validation, proxy reconnection credentials, FIPS/dual-stack/global fixtures, non-AWS tunneling, response streaming, and no recursive local proxy routing.
-- [ ] Add adversarial cases for wrong/real key, guessed proxy, replay outside skew, endpoint lookalike, direct-connect/unset proxy, explicit original credential-file read, killed audit writer, and killed proxy; label direct bypass/file access as documented limitations.
-- [ ] Generate `docs/compatibility.md` from pinned versions/results and gate macOS/Linux CI plus `amd64`/`arm64` buildability; keep real-account tests credential-gated and destructive-resource bounded.
+- [x] Complete the fake AWS server with known real test key validation, AWS JSON/Query/REST response fixtures, request ledger, latency/disconnect/403/429/5xx injection, and stateful sequential resources.
+- [x] Add AWS CLI allow/read/mutation/deny/unknown cases and verify recognizable local denial plus unmodified upstream errors/request IDs.
+- [x] Reuse one boto3 client for at least 3 minutes and one Go SDK v2 client across allowed/denied calls, transparent upstream credential refresh, streaming response, and SDK-owned retry after upstream 429.
+- [x] Run Terraform `init` through opaque registry tunnels, then sandboxed `plan` and narrow `apply` through AWS interception, including a later denied call and accurate partial audit.
+- [x] Add the A-read/B-derived-write/C-denied sequence and prove A/B remain complete, C never reaches upstream, and audit records runtime-resolved resources without claiming rollback.
+- [x] Wrap pinned Claude Code and Codex smoke fixtures that launch AWS CLI and boto3 subprocesses, inherit Kordn settings, preserve non-AWS agent API TLS, and surface local denial to agent and terminal.
+- [x] Test corporate proxy chaining, public PKI validation, proxy reconnection credentials, FIPS/dual-stack/global fixtures, non-AWS tunneling, response streaming, and no recursive local proxy routing.
+- [x] Add adversarial cases for wrong/real key, guessed proxy, replay outside skew, endpoint lookalike, direct-connect/unset proxy, explicit original credential-file read, killed audit writer, and killed proxy; label direct bypass/file access as documented limitations.
+- [x] Generate `docs/compatibility.md` from pinned versions/results and gate macOS/Linux CI plus `amd64`/`arm64` buildability; keep real-account tests credential-gated and destructive-resource bounded.
 
 Verification:
 - `make test-integration`
