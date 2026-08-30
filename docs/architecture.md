@@ -28,7 +28,7 @@ endpoint classification and SSRF checks are owned by `internal/proxy`.
 
 ## Package and legal boundary
 
-Original code is Apache-2.0. The only permitted direct iamlive integration
+Original code is MIT-licensed. The only permitted direct iamlive integration
 boundary is `internal/iammap/iamliveadapter`; Kordn-specific authentication,
 policy, forwarding, credential isolation, and audit remain outside it. Task 1
 records the evaluated upstream revision and selected minimal attributed

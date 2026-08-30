@@ -36,7 +36,7 @@ This is a greenfield implementation. The repository currently contains only the 
 - Accept every AWS decision into a bounded audit writer before considering it complete. With the default `failureMode: deny`, queue saturation or writer failure denies new AWS requests.
 - Use normal public PKI verification for upstream AWS, including when chaining through a corporate proxy. Never install the per-run CA in a system trust store.
 - Do not perform application-level AWS retries. Preserve upstream AWS response/error semantics except mandatory hop-by-hop header handling.
-- License original code under Apache-2.0, preserve all MIT notices and exact provenance for iamlive-derived material, do not derive source from unlicensed `iam-agent-proxy`, scan dependencies, and generate release SBOM/provenance.
+- License original code under MIT, preserve all third-party notices and exact provenance for iamlive-derived material, do not derive source from unlicensed `iam-agent-proxy`, scan dependencies, and generate release SBOM/provenance.
 - Document the narrow proxy-boundary security claim and explicit same-user/direct-egress bypasses; V0.1 is not an OS sandbox.
 
 ## Assumptions
@@ -79,7 +79,7 @@ This is a greenfield implementation. The repository currently contains only the 
 Goal: Establish a buildable, legally clean Go project and retire the highest-risk protocol and mapper-integration unknowns with executable spikes and recorded decisions.
 
 Context:
-- The repository is greenfield and the specification requires Apache-2.0 original code, pinned Go/dependencies, iamlive MIT provenance, and no use of unlicensed `iam-agent-proxy` source.
+- The repository is greenfield and the specification requires MIT-licensed original code, pinned Go/dependencies, iamlive MIT provenance, and no use of unlicensed `iam-agent-proxy` source.
 - The first spike must prove both per-run-CA interception of an AWS-like TLS destination and byte-opaque non-AWS CONNECT tunneling without system trust-store changes.
 - The iamlive integration form must be selected before mapper implementation so provenance and package boundaries do not have to be reconstructed later.
 
@@ -87,14 +87,14 @@ Files:
 - Create: `go.mod`, `go.sum`, `.go-version` — module and exact toolchain/dependency pins.
 - Create: `cmd/kordn/main.go`, `internal/app/commands.go` — buildable CLI entry point and command skeleton.
 - Create: `Makefile`, `.gitignore`, `.github/workflows/ci.yml` — canonical format, vet, test, race, license, and build gates.
-- Create: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `SECURITY.md`, `CONTRIBUTING.md` — project license, dependency provenance, disclosure process, DCO, and narrow security claim.
+- Create: `LICENSE`, `THIRD_PARTY_NOTICES.md`, `SECURITY.md`, `CONTRIBUTING.md` — project license, dependency provenance, disclosure process, DCO, and narrow security claim.
 - Create: `third_party/iamlive/LICENSE`, `third_party/iamlive/NOTICE`, `third_party/iamlive/UPSTREAM_COMMIT` — exact MIT attribution and selected upstream revision.
 - Create: `docs/threat-model.md`, `docs/architecture.md`, `docs/decisions/0001-iamlive-integration.md` — security boundary, one-process architecture, and import-versus-derived mapper decision.
 - Create: `test/integration/proxy_spike_test.go`, `test/fixtures/sigv4/` — CONNECT/TLS proof and initial AWS-published SigV4 vectors.
 
 Steps:
 - [x] Initialize `github.com/kordn-ai/kordn`, pin an exact stable Go patch, add a minimal command tree, and define reproducible `make fmt`, `make lint`, `make test`, and `make test-race` targets used by CI.
-- [x] Add Apache-2.0 licensing, DCO contribution guidance, vulnerability reporting, dependency license scanning, and explicit prohibition on deriving code from `iam-agent-proxy` without a license grant.
+- [x] Add MIT licensing, DCO contribution guidance, vulnerability reporting, dependency license scanning, and explicit prohibition on deriving code from `iam-agent-proxy` without a license grant.
 - [x] Implement an integration spike that starts a loopback CONNECT proxy, injects a test AWS endpoint classifier, presents a per-run CA leaf trusted only through the child CA setting, and reaches a test upstream without modifying system trust.
 - [x] Add a second spike proving a non-AWS HTTPS destination retains its end-to-end server certificate and payload bytes through an opaque CONNECT tunnel.
 - [x] Evaluate the pinned iamlive module against the required mapper inputs/outputs, choose import or minimal attributed derivation, populate all provenance files, and record rejected alternatives and the regression gate in ADR 0001.
@@ -416,7 +416,7 @@ Files:
 - Extend: package `*_fuzz_test.go` files — HTTP parsing, SigV4, decoders, mapper inputs, ARN construction, policy, and redaction fuzzing.
 - Create: `.github/workflows/release.yml`, `.goreleaser.yaml` — reproducible cross-platform builds, checksums, signing, SBOM, provenance, and publishing.
 - Create: `README.md`, `docs/quickstart.md`, `docs/security-review-checklist.md` — installation, safe example policies, security invariants, authority-ceiling guidance, limits, and review gate.
-- Modify: `SECURITY.md`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `docs/threat-model.md`, `docs/architecture.md`, `docs/compatibility.md` — final disclosure, provenance, behavior, and claims.
+- Modify: `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `docs/threat-model.md`, `docs/architecture.md`, `docs/compatibility.md` — final disclosure, provenance, behavior, and claims.
 - Modify: `cmd/kordn/main.go`, `internal/app/commands.go` — complete `version --json` build/dependency/mapper provenance.
 
 Steps:

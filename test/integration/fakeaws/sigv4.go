@@ -1,6 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-
 // Package fakeaws provides a local TLS-only upstream that independently
 // validates the header signature produced by the resigner. It never opens a
 // real AWS connection.

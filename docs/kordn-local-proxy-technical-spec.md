@@ -5,7 +5,7 @@
 **Status:** Draft v0.1  
 **Implementation target:** Local-first, open-source release  
 **Primary command:** `kordn run -- <command> [args...]`  
-**Recommended project license:** Apache License 2.0  
+**Recommended project license:** MIT License
 **Initial platforms:** macOS and Linux, `amd64` and `arm64`
 
 ---
@@ -1332,7 +1332,6 @@ kordn/
 │       ├── NOTICE
 │       └── UPSTREAM_COMMIT
 ├── LICENSE
-├── NOTICE
 ├── THIRD_PARTY_NOTICES.md
 ├── SECURITY.md
 ├── CONTRIBUTING.md
@@ -1511,14 +1510,13 @@ A future `kordn diagnose` may collect config schema version, binary version, map
 
 ### 23.1 Project license
 
-Use **Apache License 2.0** for original Kordn code.
+Use the **MIT License** for original Kordn code.
 
 Reasons:
 
-- permissive commercial and open-source use;
-- enterprise-friendly redistribution and embedding;
-- explicit contributor patent grant;
-- compatible distribution alongside MIT-licensed components when their notices are preserved.
+- minimal conditions for commercial and open-source use;
+- simple redistribution and embedding terms;
+- compatible distribution alongside separately licensed dependencies when their notices are preserved.
 
 Keep brand names and logos subject to a separate trademark policy. Use Developer Certificate of Origin sign-off for contributions initially; a CLA is not required for V0.1.
 
@@ -1528,14 +1526,13 @@ iamlive is MIT-licensed. Kordn may import, vendor, or derive code from it, subje
 
 Required files:
 
-- root `LICENSE` containing Apache-2.0 for Kordn-original code;
-- root `NOTICE`;
+- root `LICENSE` containing the MIT License for Kordn-original code;
 - `THIRD_PARTY_NOTICES.md`;
 - `third_party/iamlive/LICENSE` containing the iamlive MIT license;
 - `third_party/iamlive/UPSTREAM_COMMIT`;
 - any additional notices required by copied mapping dependencies.
 
-Source files substantially derived from iamlive must include a short provenance header identifying the upstream file/commit and MIT license.
+Substantially derived iamlive material must be identified in `third_party/iamlive/PROVENANCE.md` with the upstream file/commit and MIT license; source files do not carry license headers.
 
 ### 23.3 iam-agent-proxy
 
@@ -1561,7 +1558,7 @@ This specification is technical guidance, not legal advice; a qualified lawyer s
 
 **Deliverables**
 
-- Apache-2.0 repository skeleton;
+- MIT-licensed repository skeleton;
 - `SECURITY.md`, threat model, and bypass statement;
 - pinned Go toolchain and CI;
 - spike proving an HTTP CONNECT proxy can terminate an AWS CLI TLS connection with a per-run CA and `AWS_CA_BUNDLE`;
@@ -1907,7 +1904,7 @@ The release is acceptable only when all of the following are true:
 18. The sequential-call test demonstrates runtime dependency support and accurate partial-execution semantics.
 19. The required compatibility matrix passes on macOS and Linux.
 20. Hot-path performance meets Section 21 targets.
-21. The repository is Apache-2.0, preserves iamlive MIT notices, and contains no unlicensed copied `iam-agent-proxy` code.
+21. The repository is MIT-licensed, preserves iamlive and dependency notices, and contains no unlicensed copied `iam-agent-proxy` code.
 22. Documentation prominently states that proxy bypass is not prevented by V0.1.
 
 ---

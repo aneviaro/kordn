@@ -108,7 +108,7 @@ jobs:
           set -euxo pipefail
           test -s dist/SHA256SUMS
           printf '%s\n' '{"format":"kordn.provenance/v1","builder":"goreleaser","commit":"'"$GITHUB_SHA"'"}' > dist/provenance.json
-          printf '%s\n' 'Apache-2.0 project; reviewed third-party notices are included in each archive.' > dist/LICENSE-REPORT.txt
+          printf '%s\n' 'MIT-licensed project; reviewed third-party licenses and attributions are included in each archive.' > dist/LICENSE-REPORT.txt
           shopt -s nullglob
           sbom_files=(dist/*.sbom.json)
           test "${#sbom_files[@]}" -gt 0

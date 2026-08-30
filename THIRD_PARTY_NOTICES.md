@@ -1,16 +1,22 @@
 # Third-party notices
 
-Kordn's original code is Apache-2.0. The dependency set is deliberately small
-and is checked by `make license-check`; adding a module requires a reviewed
-license and an update to this file and `third_party/licenses/`.
+Kordn's original code is MIT-licensed. The dependency source of truth is
+[`go.mod`](go.mod), with integrity data in [`go.sum`](go.sum). We do not
+maintain a second hand-written module/version inventory here. Transitive
+modules are implementation details of the declared dependencies and are not
+Kordn APIs.
+
+Release archives include this file and the retained license texts required for
+bundled runtime code. The license files are deduplicated by license text, not
+by module.
 
 ## iamlive — MIT
 
-I am using the iamlive revision recorded in
+Kordn uses the iamlive revision recorded in
 `third_party/iamlive/UPSTREAM_COMMIT`. iamlive is MIT-licensed by Ian Mckay.
 The exact MIT text is retained at `third_party/iamlive/LICENSE`, and the
-upstream dependency notice is retained at `third_party/iamlive/NOTICE`.
-Only the minimal derived operation/action and dependent-action mapper under
+upstream dependency notice is retained at `third_party/iamlive/NOTICE`. Only
+the minimal derived operation/action and dependent-action mapper under
 `third_party/iamlive/source/` is included. Its explicit operation table is
 narrowed to Kordn's reviewed support matrix, and its typed request-value
 adaptation and fail-closed cross-checks are Kordn-specific; exact upstream
@@ -18,77 +24,34 @@ revision, path, symbols, and derivation are recorded in
 `third_party/iamlive/PROVENANCE.md`. No upstream runtime, proxy, or credential
 code is included.
 
-## AWS SDK for Go v2 and Smithy Go — Apache-2.0
+## Retained runtime license texts
 
-Kordn directly imports these pinned AWS SDK for Go v2 components:
+- `third_party/licenses/aws-sdk-v2/LICENSE` — Apache-2.0 text for the AWS
+  SDK and its Smithy Go dependency.
+- `third_party/licenses/go-yaml-v3/LICENSE` — YAML package terms, including
+  Apache-2.0 and MIT terms for libyaml-derived files.
+- `third_party/licenses/x-net/LICENSE` and
+  `third_party/licenses/x-net/PATENTS` — Go networking package terms and
+  patent grant.
+- `third_party/licenses/go-bsd-3-clause/LICENSE` — shared BSD-3-Clause text
+  for the runtime Go text package and compatible Go modules.
 
-| Module | Version | License text |
-| --- | --- | --- |
-| `github.com/aws/aws-sdk-go-v2` | `v1.37.2` | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/config` | `v1.29.3` | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/credentials` | `v1.17.56` | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/service/sts` | `v1.36.0` | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-
-The exact AWS SDK and Smithy Go submodule versions in the final module graph
-are listed below. The AWS SDK submodules use the retained Apache-2.0 text at
-`third_party/licenses/aws-sdk-v2/LICENSE`; Smithy Go uses the retained
-Apache-2.0 text at `third_party/licenses/smithy-go/LICENSE`.
-
-| Module | Version | Directness | License text |
-| --- | --- | --- | --- |
-| `github.com/aws/aws-sdk-go-v2` | `v1.37.2` | direct | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/config` | `v1.29.3` | direct | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/credentials` | `v1.17.56` | direct | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/feature/ec2/imds` | `v1.16.26` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/internal/configsources` | `v1.4.2` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/internal/endpoints/v2` | `v2.7.2` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/internal/ini` | `v1.8.2` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding` | `v1.13.0` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/service/internal/presigned-url` | `v1.13.2` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/service/sso` | `v1.24.13` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/service/ssooidc` | `v1.28.12` | indirect | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/aws-sdk-go-v2/service/sts` | `v1.36.0` | direct | `third_party/licenses/aws-sdk-v2/LICENSE` (Apache-2.0) |
-| `github.com/aws/smithy-go` | `v1.22.5` | indirect | `third_party/licenses/smithy-go/LICENSE` (Apache-2.0) |
-
-## Go modules
-
-The remaining exact module graph is explicitly enumerated by
-`make license-check`:
-
-| Module | Version | License text |
-| --- | --- | --- |
-| `github.com/dlclark/regexp2` | `v1.11.0` | `third_party/licenses/regexp2/LICENSE` (MIT) |
-| `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` | `third_party/licenses/jsonschema-v6/LICENSE` (Apache-2.0) |
-| `go.yaml.in/yaml/v3` | `v3.0.4` | `third_party/licenses/go-yaml-v3/LICENSE` (Apache-2.0 project files and MIT libyaml-derived files) |
-| `golang.org/x/crypto` | `v0.19.0` | `third_party/licenses/x-crypto/LICENSE` (BSD-3-Clause) |
-| `golang.org/x/mod` | `v0.8.0` | `third_party/licenses/x-mod/LICENSE` (BSD-3-Clause) |
-| `golang.org/x/net` | `v0.21.0` | `third_party/licenses/x-net/LICENSE` (BSD-3-Clause plus Go patent grant) |
-| `golang.org/x/sys` | `v0.17.0` | `third_party/licenses/x-sys/LICENSE` (BSD-3-Clause) |
-| `golang.org/x/term` | `v0.17.0` | `third_party/licenses/x-term/LICENSE` (BSD-3-Clause) |
-| `golang.org/x/text` | `v0.14.0` | `third_party/licenses/x-text/LICENSE` (BSD-3-Clause) |
-| `golang.org/x/tools` | `v0.6.0` | `third_party/licenses/x-tools/LICENSE` (BSD-3-Clause) |
-| `gopkg.in/check.v1` | `v1.0.0-20161208181325-20d25e280405` | `third_party/licenses/check-v1/LICENSE` (BSD-3-Clause) |
-
-The graph above was obtained after `go mod tidy` in a temporary HOME with
-`GOPROXY=https://proxy.golang.org,direct` and
-`GOSUMDB=sum.golang.org`; checksums are retained in `go.sum`. The license gate
-matches every graph entry exactly and rejects an unknown future module.
-
-`regexp2`, `x/mod`, `x/sys`, `x/tools`, and `check.v1` are transitive module
-graph entries retained by the pinned validator/YAML dependency graph. They are
-listed so a release does not silently acquire an unreviewed license.
+The JSON Schema validator and other test-only modules remain in the normal Go
+module graph for tests, but are not bundled into the production binary or
+maintained as Kordn runtime dependencies.
 
 The project does not derive code from unlicensed `iam-agent-proxy`; no such
 source is a dependency.
 
 ## Release provenance
 
-Release archives carry `LICENSE`, `NOTICE`, and this complete notice file,
-plus SHA256 checksums, a CycloneDX JSON SBOM, Cosign keyless signature, and
-GitHub build provenance. The mapper integration is the embedded attributed adapter based
-on iamlive commit `3ec1a40e560c2f00ec82c50223add810e2567efb`, resolved
-2026-08-18, with MIT text and upstream notice retained. AWS authorization data
-is the embedded snapshot `aws-sar-nine-service-2026-08-27`, retrieved
-2026-08-27 from the exact service-list and mapping URLs recorded in
+Release archives carry `LICENSE`, this notice file, the retained license
+texts, SHA256 checksums, a CycloneDX JSON SBOM, Cosign keyless signature, and
+GitHub build provenance. The mapper integration is the embedded attributed
+adapter based on iamlive commit
+`3ec1a40e560c2f00ec82c50223add810e2567efb`, resolved 2026-08-18, with MIT text
+and upstream notice retained. AWS authorization data is the embedded snapshot
+`aws-sar-nine-service-2026-08-27`, retrieved 2026-08-27 from the exact
+service-list and mapping URLs recorded in
 `internal/iammap/data/source/manifest.json`; its generated files and hashes
 are checked by mapper golden and widening tests.
