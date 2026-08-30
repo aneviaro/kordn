@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -257,15 +258,31 @@ func newCompatHarness(t *testing.T, deny bool) *compatHarness {
 }
 
 func newCompatHarnessWithClock(t *testing.T, deny bool, clock func() time.Time) *compatHarness {
-	return newCompatHarnessWithParent(t, deny, clock, "")
+	return newCompatHarnessWithParentAndDialHook(t, deny, clock, "", nil)
+}
+
+func newCompatHarnessWithOutboundDialHook(t *testing.T, deny bool, clock func() time.Time, hook func()) *compatHarness {
+	return newCompatHarnessWithParentAndDialHookAndWrapper(t, deny, clock, "", hook, nil, nil)
+}
+
+func newCompatHarnessWithTimedOutboundDial(t *testing.T, deny bool, clock func() time.Time, hook func(), wrap func(context.Context, time.Time, net.Conn) net.Conn, upstreamWrap func(http.RoundTripper) http.RoundTripper) *compatHarness {
+	return newCompatHarnessWithParentAndDialHookAndWrapper(t, deny, clock, "", hook, wrap, upstreamWrap)
 }
 
 func newCompatHarnessWithParent(t *testing.T, deny bool, clock func() time.Time, parentURL string) *compatHarness {
+	return newCompatHarnessWithParentAndDialHook(t, deny, clock, parentURL, nil)
+}
+
+func newCompatHarnessWithParentAndDialHook(t *testing.T, deny bool, clock func() time.Time, parentURL string, hook func()) *compatHarness {
+	return newCompatHarnessWithParentAndDialHookAndWrapper(t, deny, clock, parentURL, hook, nil, nil)
+}
+
+func newCompatHarnessWithParentAndDialHookAndWrapper(t *testing.T, deny bool, clock func() time.Time, parentURL string, hook func(), wrap func(context.Context, time.Time, net.Conn) net.Conn, upstreamWrap func(http.RoundTripper) http.RoundTripper) *compatHarness {
 	t.Helper()
 	fake := aws.Credentials{AccessKeyID: "KORDNCOMPATACCESS01", SecretAccessKey: "compat-secret-key", SessionToken: "compat-session-token", CanExpire: true, Expires: clock().Add(time.Hour)}
 	real := aws.Credentials{AccessKeyID: "COMPATUPSTREAM01", SecretAccessKey: "upstream-secret-key", SessionToken: "upstream-session-token"}
-	responses := map[string]fakeaws.Response{"GetCallerIdentity": {Status: http.StatusOK, Headers: http.Header{"Content-Type": {"application/x-amz-json-1.1"}}, Body: []byte(`{"UserId":"compat","Account":"123456789012","Arn":"arn:aws:iam::123456789012:role/compat"}`)}}
-	upstream := fakeaws.NewWithConfig(fakeaws.Config{Credentials: real, Clock: clock, Responses: responses})
+	upstream := fakeaws.NewWithConfig(fakeaws.Config{Credentials: real, Clock: clock})
+	upstream.SetResponse("GetCallerIdentity", fakeaws.Response{Status: http.StatusOK, Body: []byte(`{"UserId":"compat","Account":"123456789012","Arn":"arn:aws:iam::123456789012:role/compat"}`)})
 	t.Cleanup(upstream.Close)
 	var parent *httptest.Server
 	if parentURL == "__fixture__" {
@@ -337,13 +354,31 @@ func newCompatHarnessWithParent(t *testing.T, deny bool, clock func() time.Time,
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, upstream.Listener.Addr().String())
 	})
+	if hook != nil || wrap != nil {
+		baseDialer := dialer
+		dialer = proxy.DialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
+			if hook != nil {
+				hook()
+			}
+			dialStart := time.Now()
+			conn, err := baseDialer.DialContext(ctx, network, address)
+			if err == nil && wrap != nil {
+				conn = wrap(ctx, dialStart, conn)
+			}
+			return conn, err
+		})
+	}
 	transport := proxy.NewOutboundTransport(parentSettings, proxy.TransportConfig{Dialer: dialer, RootCAs: upstream.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs})
 	// httptest's certificate is issued for its loopback listener address. The
 	// request Host remains the real AWS name, while this explicit local dial
 	// keeps TLS verification pinned to the fixture certificate.
 	transport.TLSClientConfig.ServerName = "127.0.0.1"
 	aud := &compatAudit{}
-	server, err := proxy.NewServer(proxy.Config{ListenAddr: "127.0.0.1:0", Username: "compat-user", Password: "compat-password", RunID: "compat-run", PolicyHash: "sha256:" + strings.Repeat("0", 64), InboundAuthenticator: verifier, Decoder: decoder, Mapper: compatMapper{}, Policy: compatPolicy{deny: deny}, Audit: aud, Resigner: resigner, Upstream: proxy.NewNoReplayRoundTripper(transport), Caches: mustCompatCaches(t)})
+	upstreamTransport := proxy.NewNoReplayRoundTripper(transport)
+	if upstreamWrap != nil {
+		upstreamTransport = upstreamWrap(upstreamTransport)
+	}
+	server, err := proxy.NewServer(proxy.Config{ListenAddr: "127.0.0.1:0", Username: "compat-user", Password: "compat-password", RunID: "compat-run", PolicyHash: "sha256:" + strings.Repeat("0", 64), InboundAuthenticator: verifier, Decoder: decoder, Mapper: compatMapper{}, Policy: compatPolicy{deny: deny}, Audit: aud, Resigner: resigner, Upstream: upstreamTransport, Caches: mustCompatCaches(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,22 +411,33 @@ func tlsConfigFor(server *proxy.Server) tls.Config {
 }
 
 func (h *compatHarness) call(t *testing.T, operation string) *http.Response {
+	return h.callWithClient(t, h.client, operation)
+}
+
+func (h *compatHarness) callWithClient(t *testing.T, client *http.Client, operation string) *http.Response {
+	return h.callWithClientContext(t, context.Background(), client, operation)
+}
+
+func (h *compatHarness) callWithClientContext(t *testing.T, ctx context.Context, client *http.Client, operation string) *http.Response {
 	t.Helper()
 	body := []byte("Action=" + operation + "&Version=2011-06-15")
-	req, err := http.NewRequest(http.MethodPost, "https://"+compatHost+"/", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+compatHost+"/", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Host = compatHost
+	if worker, ok := ctx.Value("kordn-performance-worker").(int); ok {
+		req.Header.Set("X-Kordn-Performance-Worker", strconv.Itoa(worker))
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("X-Amz-Date", h.clock().Format("20060102T150405Z"))
 	hash := sha256.Sum256(body)
 	payload := hex.EncodeToString(hash[:])
 	req.Header.Set("X-Amz-Content-Sha256", payload)
-	if err := v4.NewSigner().SignHTTP(context.Background(), h.fake, req, payload, fakeaws.Service, fakeaws.Region, h.clock()); err != nil {
+	if err := v4.NewSigner().SignHTTP(ctx, h.fake, req, payload, fakeaws.Service, fakeaws.Region, h.clock()); err != nil {
 		t.Fatal(err)
 	}
-	response, err := h.client.Do(req)
+	response, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

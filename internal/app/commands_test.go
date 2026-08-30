@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,29 @@ import (
 	"github.com/kordn-ai/kordn/internal/config"
 	"github.com/kordn-ai/kordn/internal/credentials"
 )
+
+func TestVersionJSONIsDeterministicAndCarriesProvenance(t *testing.T) {
+	first, err := json.Marshal(buildVersionInfo())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(buildVersionInfo())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatal("version metadata is not deterministic")
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(first, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"target", "go", "mapper", "iamlive", "authorization_data", "direct_dependencies"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("version JSON omitted %q", key)
+		}
+	}
+}
 
 func TestIdentityParserAcceptsBothOrdersAndRejectsAmbiguity(t *testing.T) {
 	for _, args := range [][]string{

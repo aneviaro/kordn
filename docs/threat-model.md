@@ -51,3 +51,12 @@ limitations are documented rather than presented as blocked attacks.
 Users should configure a dedicated, least-privileged upstream profile or role;
 Kordn does not turn an administrator upstream identity into an AWS permission
 boundary.
+
+Performance and leak measurements are release checks, not security claims:
+`make strict-performance`, `make soak-leak`, and `make soak-leak-race`.
+The mandatory non-race soak invocation is
+`KORDN_SOAK=1 go test ./test/integration -run '^TestMixedRequestSoak$' -count=1`.
+Results record the reference machine, throughput, latency percentiles, RSS,
+goroutines, file descriptors, heap/cache observations, audit bound, and temp
+files. Any invariant exception requires this model to be updated and approved
+by security review.

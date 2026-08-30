@@ -976,7 +976,19 @@ func (s *Server) finishAuthenticationFailure(w http.ResponseWriter, req *http.Re
 func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest destination, endpoint awsrequest.AWSEndpoint) {
 	ctx := req.Context()
 	started := time.Now()
-	defer func() { s.metrics.Observe(observe.LocalLatency, time.Since(started)) }()
+	var upstreamElapsed time.Duration
+	defer func() {
+		// LocalLatency is the complete handler lifetime, including response
+		// processing, minus only the measured upstream RoundTrip. Keeping the
+		// subtraction here (rather than stopping the timer around RoundTrip)
+		// preserves classification, audit, resign, and response-copy time while
+		// excluding remote/network time on both success and error paths.
+		localElapsed := time.Since(started) - upstreamElapsed
+		if localElapsed < 0 {
+			localElapsed = 0
+		}
+		s.metrics.Observe(observe.LocalLatency, localElapsed)
+	}()
 	runID := s.config.RunID
 	if runID == "" {
 		runID = "run-unknown"
@@ -1140,7 +1152,8 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 	s.metrics.Inc(observe.Allowed)
 	upstreamStart := time.Now()
 	response, err := s.config.Upstream.RoundTrip(outgoing)
-	s.metrics.Observe(observe.UpstreamLatency, time.Since(upstreamStart))
+	upstreamElapsed = time.Since(upstreamStart)
+	s.metrics.Observe(observe.UpstreamLatency, upstreamElapsed)
 	if err != nil || response == nil {
 		s.metrics.Inc(observe.UpstreamErrors)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {

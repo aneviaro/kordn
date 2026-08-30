@@ -24,11 +24,14 @@ import (
 	"testing"
 	"time"
 
+	sdkcredentials "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/kordn-ai/kordn/internal/audit"
 	"github.com/kordn-ai/kordn/internal/awserror"
 	"github.com/kordn-ai/kordn/internal/awsrequest"
+	"github.com/kordn-ai/kordn/internal/observe"
 	"github.com/kordn-ai/kordn/internal/policy"
 	"github.com/kordn-ai/kordn/internal/runtime"
+	"github.com/kordn-ai/kordn/internal/sigv4"
 )
 
 const testUser = "proxy-user"
@@ -548,6 +551,68 @@ func TestProxy_TunnelCancellationClosesBothDirections(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tunnel did not stop after cancellation")
 	}
+}
+
+func TestProxy_LocalLatencySubtractsOnlyUpstreamRoundTrip(t *testing.T) {
+	endpoint := task8Endpoint()
+	request := httptest.NewRequest(http.MethodPost, "https://"+endpoint.Host+"/", nil)
+	request.Host = endpoint.Host
+	decoded := task8Decoded("GetCallerIdentity", "123456789012", endpoint.Region, endpoint.Partition)
+	resigner, err := sigv4.NewResigner(sdkcredentials.NewStaticCredentialsProvider("UPSTREAMACCESS01", "upstream-secret", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(Config{
+		Username: testUser, Password: testPassword, RunID: "run-local-latency",
+		PolicyHash: "sha256:" + strings.Repeat("0", 64),
+		InboundAuthenticator: pipelineAuthenticator{verified: &awsrequest.VerifiedRequest{
+			Request: request, Endpoint: endpoint, Protocol: awsrequest.ProtocolJSON11,
+			SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: endpoint.Region,
+			SigningService: endpoint.Service, PayloadMode: awsrequest.PayloadHashEmpty,
+		}},
+		Decoder: pipelineDecoder{decoded: decoded}, Mapper: pipelineMapper{mapping: task8Mapping(decoded.Operation, "*")},
+		Policy: pipelinePolicy{decision: policy.Decision{Result: policy.DecisionAllow, ReasonCode: awserror.ReasonAllRequirementsAllowed}},
+		Audit:  &pipelineAuditCollector{}, Resigner: resigner,
+		Upstream: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			time.Sleep(75 * time.Millisecond)
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: &latencyBody{data: []byte("response"), delay: 10 * time.Millisecond}, Request: req}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	response := httptest.NewRecorder()
+	server.handlePipeline(response, request, destination{Host: endpoint.Host, Port: 443}, endpoint)
+	if response.Code != http.StatusOK || response.Body.String() != "response" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	snapshot := server.MetricsSnapshot()
+	upstream := snapshot.Histograms[observe.UpstreamLatency]
+	local := snapshot.Histograms[observe.LocalLatency]
+	if upstream.Count != 1 || upstream.P50 < 60 {
+		t.Fatalf("upstream histogram = %+v, want measured RoundTrip delay", upstream)
+	}
+	if local.Count != 1 || local.P50 >= upstream.P50*0.8 || local.P50 < 5 {
+		t.Fatalf("local histogram = %+v upstream=%+v, want response processing but not RoundTrip", local, upstream)
+	}
+}
+
+type latencyBody struct {
+	data  []byte
+	delay time.Duration
+	done  bool
+}
+
+func (r *latencyBody) Close() error { return nil }
+
+func (r *latencyBody) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	time.Sleep(r.delay)
+	r.done = true
+	return copy(p, r.data), nil
 }
 
 func TestProxy_PipelineDeniesBeforeResignOrForwardAndAudits(t *testing.T) {

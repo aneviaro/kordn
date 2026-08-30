@@ -2,20 +2,23 @@ Kordn
 Copyright 2026 Kordn AI contributors.
 
 Kordn original source is licensed under the Apache License, Version 2.0; see
-LICENSE. Third-party provenance and license texts are listed in
-THIRD_PARTY_NOTICES.md.
+LICENSE. Release archives preserve this notice and THIRD_PARTY_NOTICES.md and
+publish SHA256 checksums, a CycloneDX JSON SBOM, Cosign keyless signature, and
+GitHub provenance metadata. The offline snapshot records deterministic CGO=0
+cross-build settings.
 
 The iamlive MIT attribution retained under third_party/iamlive/ is included
 for the selected, separately bounded mapper integration described in
-docs/decisions/0001-iamlive-integration.md.
+docs/decisions/0001-iamlive-integration.md. The exact source is iamlive
+https://github.com/iann0036/iamlive at commit
+3ec1a40e560c2f00ec82c50223add810e2567efb (resolved 2026-08-18), integrated as
+an embedded attributed adapter; no iamlive runtime is imported.
 
-The distributed configuration, schema validation, and IDNA endpoint-normalization
-dependencies retain their upstream copyright and license notices under
-third_party/licenses/.
+AWS authorization data is the embedded nine-service snapshot
+aws-sar-nine-service-2026-08-27, retrieved 2026-08-27 from
+https://servicereference.us-east-1.amazonaws.com/v1/service-list.json and
+https://servicereference.us-east-1.amazonaws.com/v1/mapping.json. Its exact
+manifest and checksums are under internal/iammap/data/source/.
 
-The AWS SDK for Go v2 components and Smithy Go are Apache-2.0 licensed. Their
-retained license texts are under
-third_party/licenses/aws-sdk-v2/LICENSE and
-third_party/licenses/smithy-go/LICENSE, respectively. The exact module
-versions and direct/indirect dependency graph are recorded in
-THIRD_PARTY_NOTICES.md and pinned in go.mod and go.sum.
+Dependency license texts and complete provenance are listed in
+THIRD_PARTY_NOTICES.md and third_party/licenses/.

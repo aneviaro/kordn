@@ -24,10 +24,13 @@ import (
 	"github.com/kordn-ai/kordn/internal/audit"
 	"github.com/kordn-ai/kordn/internal/config"
 	"github.com/kordn-ai/kordn/internal/credentials"
+	"github.com/kordn-ai/kordn/internal/iammap/data"
+	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 )
 
@@ -189,7 +192,7 @@ func initCommand(args []string) int {
 		return 78
 	}
 	p := filepath.Join(root, "config.yaml")
-	const doc = `apiVersion: kordn.dev/v1alpha1
+	doc := fmt.Sprintf(`apiVersion: kordn.dev/v1alpha1
 kind: LocalRunPolicy
 upstream:
   profile: kordn-prod-ceiling
@@ -206,12 +209,12 @@ policy:
   default: deny
   rules: []
 audit:
-  path: ~/.kordn/audit/events.jsonl
+  path: %s
   fsync: batch
   failureMode: deny
   logResourceArns: false
   hashResourceNames: true
-`
+`, filepath.Join(root, "audit", "events.jsonl"))
 	if err := atomicPrivateConfig(p, []byte(doc)); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			fmt.Fprintln(os.Stderr, "kordn init: config already exists")
@@ -297,7 +300,7 @@ func validatePolicyCommand(args []string) int {
 	}
 	cfg, err := config.Load(configArg(args))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "kordn policy validate: invalid configuration %w\n", err)
+		fmt.Fprintf(os.Stderr, "kordn policy validate: invalid configuration %v\n", err)
 		return 2
 	}
 	fmt.Printf("valid policy %s\n", cfg.PolicyHash)
@@ -442,6 +445,62 @@ func auditCommand(args []string) int {
 	}
 	return 0
 }
+
+type versionDependency struct {
+	Path    string `json:"path"`
+	Version string `json:"version"`
+	Sum     string `json:"sum,omitempty"`
+}
+
+type versionInfo struct {
+	Binary             string              `json:"binary"`
+	Version            string              `json:"version"`
+	Commit             string              `json:"commit,omitempty"`
+	Target             string              `json:"target"`
+	Go                 string              `json:"go"`
+	Config             string              `json:"config"`
+	Audit              string              `json:"audit"`
+	Mapper             string              `json:"mapper"`
+	IamLive            string              `json:"iamlive"`
+	AuthorizationData  string              `json:"authorization_data"`
+	DirectDependencies []versionDependency `json:"direct_dependencies"`
+}
+
+func buildVersionInfo() versionInfo {
+	info := versionInfo{
+		Binary: "kordn", Version: "0.1.0", Target: runtime.GOOS + "/" + runtime.GOARCH,
+		Go: runtime.Version(), Config: "kordn.dev/v1alpha1", Audit: audit.SchemaVersion,
+		Mapper: "kordn-iammap/v2", IamLive: iamliveadapter.AdapterVersion,
+		AuthorizationData: data.AuthorizationDataVersion(), DirectDependencies: directDependencies(),
+	}
+	if build, ok := debug.ReadBuildInfo(); ok {
+		if build.Main.Version != "" && build.Main.Version != "(devel)" {
+			info.Version = build.Main.Version
+		}
+		for _, setting := range build.Settings {
+			if setting.Key == "vcs.revision" {
+				info.Commit = setting.Value
+			}
+		}
+	}
+	return info
+}
+
+// directDependencies is intentionally a checked-in projection of go.mod's
+// direct require block. BuildInfo does not expose Go's direct/indirect marker,
+// and recording this explicit list keeps version --json deterministic.
+func directDependencies() []versionDependency {
+	return []versionDependency{
+		{Path: "github.com/aws/aws-sdk-go-v2", Version: "v1.37.2"},
+		{Path: "github.com/aws/aws-sdk-go-v2/config", Version: "v1.29.3"},
+		{Path: "github.com/aws/aws-sdk-go-v2/credentials", Version: "v1.17.56"},
+		{Path: "github.com/aws/aws-sdk-go-v2/service/sts", Version: "v1.36.0"},
+		{Path: "github.com/santhosh-tekuri/jsonschema/v6", Version: "v6.0.3"},
+		{Path: "go.yaml.in/yaml/v3", Version: "v3.0.4"},
+		{Path: "golang.org/x/net", Version: "v0.21.0"},
+	}
+}
+
 func versionCommand(args []string) int {
 	jsonOut := false
 	for _, a := range args {
@@ -451,12 +510,15 @@ func versionCommand(args []string) int {
 			return 2
 		}
 	}
-	v := map[string]string{"binary": "kordn", "config": "kordn.dev/v1alpha1", "audit": audit.SchemaVersion, "mapper": "kordn-iammap/v2", "iamlive": "embedded", "data": "embedded"}
+	info := buildVersionInfo()
 	if jsonOut {
-		b, _ := json.Marshal(v)
+		b, err := json.Marshal(info)
+		if err != nil {
+			return 70
+		}
 		fmt.Println(string(b))
 	} else {
-		fmt.Printf("kordn (go %s)\n", runtime.Version())
+		fmt.Printf("%s %s (%s)\n", info.Binary, info.Version, info.Target)
 	}
 	return 0
 }

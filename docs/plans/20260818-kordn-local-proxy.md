@@ -420,14 +420,14 @@ Files:
 - Modify: `cmd/kordn/main.go`, `internal/app/commands.go` — complete `version --json` build/dependency/mapper provenance.
 
 Steps:
-- [ ] Add benchmarks for canonicalization/verification, re-signing, JSON/Query decoding, extraction, 10/100/1,000-rule policy matching, decision cache hit/miss, JSONL serialization, and leaf generation/cache hit.
-- [ ] Add load tests for 100 concurrent connections and at least 500 ordinary requests/s, startup and local latency percentiles, idle/compatibility memory, and bounded audit behavior.
-- [ ] Run 10,000 mixed requests and compare goroutines, file descriptors, heap, cache sizes, audit queue, and temp files before/after bounded settling; fail on material leaks.
-- [ ] Run race, vet, fuzz-smoke, secret scan, dependency/license vulnerability checks, mapper widening checks, compatibility tests, and security-invariant checklist as release prerequisites.
-- [ ] Build reproducible static macOS/Linux `amd64`/`arm64` binaries; attach checksums, signatures, SBOM, build provenance, dependency/license report, and exact mapper/AWS data versions.
-- [ ] Document installation, deny-by-default initialization, dedicated limited upstream-role guidance, supported/unsupported compatibility, audit handling, corporate proxy behavior, and the prominent direct-bypass warning.
-- [ ] Make `kordn version --json` report binary/toolchain version, commit, target, direct dependencies, iamlive commit/integration form, and AWS authorization-data snapshot without secrets.
-- [ ] Reconcile every Section 20 invariant and Section 26 acceptance criterion to an automated test or explicit release checklist item; require a threat-model update and security review for any exception.
+- [x] Add benchmarks for canonicalization/verification, re-signing, JSON/Query decoding, extraction, 10/100/1,000-rule policy matching, decision cache hit/miss, JSONL serialization, and leaf generation/cache hit.
+- [x] Add load tests for 100 concurrent connections and at least 500 ordinary requests/s, startup and local latency percentiles, idle/compatibility memory, and bounded audit behavior.
+- [x] Run 10,000 mixed requests and compare goroutines, file descriptors, heap, cache sizes, audit queue, and temp files before/after bounded settling; fail on material leaks.
+- [x] Run race, vet, fuzz-smoke, secret scan, dependency/license vulnerability checks, mapper widening checks, compatibility tests, and security-invariant checklist as release prerequisites.
+- [x] Build reproducible static macOS/Linux `amd64`/`arm64` binaries; attach checksums, signatures, SBOM, build provenance, dependency/license report, and exact mapper/AWS data versions.
+- [x] Document installation, deny-by-default initialization, dedicated limited upstream-role guidance, supported/unsupported compatibility, audit handling, corporate proxy behavior, and the prominent direct-bypass warning.
+- [x] Make `kordn version --json` report binary/toolchain version, commit, target, direct dependencies, iamlive commit/integration form, and AWS authorization-data snapshot without secrets.
+- [x] Reconcile every Section 20 invariant and Section 26 acceptance criterion to an automated test or explicit release checklist item; require a threat-model update and security review for any exception.
 
 Verification:
 - `make fmt-check lint test-race test-integration test-compatibility benchmark security-check license-check release-snapshot`

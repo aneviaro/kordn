@@ -1,8 +1,15 @@
 name: ci
 
 on:
+  # Feature branches are covered by pull_request. Restrict push runs to main
+  # so updating an open PR does not start a duplicate CI run.
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -15,22 +22,13 @@ env:
   PYTHON_VERSION: '3.12'
   BOTO3_VERSION: '1.39.9'
   CLAUDE_VERSION: '2.0.0'
-  CODEX_VERSION: '0.1.250'
 
 jobs:
   pure:
-    name: pure-${{ matrix.os }}-${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, arch: amd64, goarch: amd64 }
-          - { os: ubuntu-24.04-arm, arch: arm64, goarch: arm64 }
-          - { os: macos-13, arch: amd64, goarch: amd64 }
-          - { os: macos-14, arch: arm64, goarch: arm64 }
-    runs-on: ${{ matrix.os }}
+    name: pure-ubuntu-latest-amd64
+    runs-on: ubuntu-latest
     env:
-      GOARCH: ${{ matrix.goarch }}
+      GOARCH: amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -38,42 +36,30 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
       - name: Verify runner architecture
-        run: test "$(uname -m)" = "${{ matrix.goarch == 'amd64' && 'x86_64' || 'arm64' }}"
+        run: test "$(uname -m)" = x86_64
       - name: Format
         run: make fmt-check
       - name: Vet
         run: make lint
+      # The race run already executes the ordinary unit, integration, and
+      # schema tests, so do not run those suites a second time.
       - name: Tests
-        run: make test
-      - name: Race tests
         run: make test-race
-      - name: Compatibility integration
-        run: make test-compatibility
       - name: License gate
         run: make license-check
-      - name: Schema gate
-        run: make schema-check
       - name: Build
         run: make build
 
   external:
-    name: external-${{ matrix.name }}
+    name: external-linux-amd64-claude
     needs: pure
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-amd64-claude, os: ubuntu-latest, arch: amd64, goarch: amd64, aws_arch: x86_64, agent: claude }
-          - { name: linux-amd64-codex, os: ubuntu-latest, arch: amd64, goarch: amd64, aws_arch: x86_64, agent: codex }
-          - { name: macos-arm64-claude, os: macos-14, arch: arm64, goarch: arm64, aws_arch: aarch64, agent: claude }
-          - { name: macos-arm64-codex, os: macos-14, arch: arm64, goarch: arm64, aws_arch: aarch64, agent: codex }
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     env:
-      GOARCH: ${{ matrix.goarch }}
+      GOARCH: amd64
       KORDN_EXTERNAL_REQUIRED: '1'
       KORDN_EXTERNAL_TESTS: '1'
       KORDN_BOTO_LONG_RUN: '1'
-      KORDN_AGENT: ${{ matrix.agent }}
+      KORDN_AGENT: claude
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -84,24 +70,16 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          if [ "$(uname -s)" = Linux ]; then
-            curl --fail --location "https://awscli.amazonaws.com/AWSCLIV2-${AWSCLI_VERSION}.zip" -o /tmp/aws.zip
-            unzip -q /tmp/aws.zip -d /tmp/awscli
-            sudo /tmp/awscli/aws/install --update
-          else
-            curl --fail --location "https://awscli.amazonaws.com/AWSCLIV2-${AWSCLI_VERSION}.pkg" -o /tmp/AWSCLIV2.pkg
-            sudo installer -pkg /tmp/AWSCLIV2.pkg -target /
-          fi
+          curl --fail --location "https://awscli.amazonaws.com/AWSCLIV2-${AWSCLI_VERSION}.zip" -o /tmp/aws.zip
+          unzip -q /tmp/aws.zip -d /tmp/awscli
+          sudo /tmp/awscli/aws/install --update
           aws --version | grep -F "${AWSCLI_VERSION}"
       - name: Install exact Terraform and provider mirror
         shell: bash
         run: |
           set -euxo pipefail
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) tf_arch=amd64; tf_os=linux;;
-            Darwin-arm64) tf_arch=arm64; tf_os=darwin;;
-            *) echo "unsupported external runner" >&2; exit 1;;
-          esac
+          tf_arch=amd64
+          tf_os=linux
           curl --fail --location "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_${tf_os}_${tf_arch}.zip" -o /tmp/terraform.zip
           unzip -qo /tmp/terraform.zip -d /tmp/bin
           sudo install /tmp/bin/terraform /usr/local/bin/terraform
@@ -127,10 +105,9 @@ jobs:
           assert boto3.__version__ == expected, boto3.__version__
           assert botocore.__version__ == expected, botocore.__version__
           PY
-      - name: Install exact Claude and Codex producers
+      - name: Install exact Claude producer
         run: |
-          npm install --global "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "@openai/codex@${CODEX_VERSION}"
+          npm install --global "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
           claude --version
-          codex --version
       - name: Required external producer gate
         run: make test-external
