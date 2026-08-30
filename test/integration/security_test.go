@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -162,6 +163,7 @@ type securityHarness struct {
 	client   *http.Client
 	fake     aws.Credentials
 	audit    *securityAudit
+	caches   *cache.RunCaches
 	clock    time.Time
 	host     string
 	service  string
@@ -225,15 +227,32 @@ func newSecurityHarnessWithAudit(t *testing.T, deny bool, writer audit.AuditWrit
 }
 
 func newSecurityHarnessWithPolicy(t *testing.T, selectedPolicy securityPolicy, writer audit.AuditWriter) *securityHarness {
-	return newSecurityHarnessForEndpoint(t, selectedPolicy, writer, fakeaws.Host, fakeaws.Service, fakeaws.Region)
+	return newSecurityHarnessForEndpointWithDialHook(t, selectedPolicy, writer, fakeaws.Host, fakeaws.Service, fakeaws.Region, nil)
+}
+
+func newSecurityHarnessWithOutboundDialHook(t *testing.T, selectedPolicy securityPolicy, writer audit.AuditWriter, hook func()) *securityHarness {
+	return newSecurityHarnessForEndpointWithDialHookAndWrapper(t, selectedPolicy, writer, fakeaws.Host, fakeaws.Service, fakeaws.Region, hook, nil, nil)
+}
+
+func newSecurityHarnessWithTimedOutboundDial(t *testing.T, selectedPolicy securityPolicy, writer audit.AuditWriter, hook func(), wrap func(context.Context, time.Time, net.Conn) net.Conn, upstreamWrap func(http.RoundTripper) http.RoundTripper) *securityHarness {
+	return newSecurityHarnessForEndpointWithDialHookAndWrapper(t, selectedPolicy, writer, fakeaws.Host, fakeaws.Service, fakeaws.Region, hook, wrap, upstreamWrap)
 }
 
 func newSecurityHarnessForEndpoint(t *testing.T, selectedPolicy securityPolicy, writer audit.AuditWriter, host, service, region string) *securityHarness {
+	return newSecurityHarnessForEndpointWithDialHook(t, selectedPolicy, writer, host, service, region, nil)
+}
+
+func newSecurityHarnessForEndpointWithDialHook(t *testing.T, selectedPolicy securityPolicy, writer audit.AuditWriter, host, service, region string, hook func()) *securityHarness {
+	return newSecurityHarnessForEndpointWithDialHookAndWrapper(t, selectedPolicy, writer, host, service, region, hook, nil, nil)
+}
+
+func newSecurityHarnessForEndpointWithDialHookAndWrapper(t *testing.T, selectedPolicy securityPolicy, writer audit.AuditWriter, host, service, region string, hook func(), wrap func(context.Context, time.Time, net.Conn) net.Conn, upstreamWrap func(http.RoundTripper) http.RoundTripper) *securityHarness {
 	t.Helper()
 	clock := time.Now().UTC()
 	fake := aws.Credentials{AccessKeyID: "KORDNSECURITYACCESS01", SecretAccessKey: "security-fake-secret", SessionToken: "security-fake-token"}
 	real := aws.Credentials{AccessKeyID: "SECURITYUPSTREAM01", SecretAccessKey: "security-upstream-secret", SessionToken: "security-upstream-token"}
-	upstream := fakeaws.NewWithConfig(fakeaws.Config{Credentials: real, Host: host, Service: service, Region: region, Clock: func() time.Time { return clock }, Responses: map[string]fakeaws.Response{"GetCallerIdentity": {Status: http.StatusOK, Body: []byte(`{"ok":true}`)}}})
+	upstream := fakeaws.NewWithConfig(fakeaws.Config{Credentials: real, Host: host, Service: service, Region: region, Clock: func() time.Time { return clock }})
+	upstream.SetResponse("GetCallerIdentity", fakeaws.Response{Status: http.StatusOK, Body: []byte(`{"ok":true}`)})
 	t.Cleanup(upstream.Close)
 	verifier, err := sigv4.NewVerifier(credentials.FakeCredential{AccessKeyID: fake.AccessKeyID, SecretAccessKey: fake.SecretAccessKey, SessionToken: fake.SessionToken}, sigv4.WithClock(func() time.Time { return clock }))
 	if err != nil {
@@ -250,13 +269,32 @@ func newSecurityHarnessForEndpoint(t *testing.T, selectedPolicy securityPolicy, 
 	dialer := proxy.DialerFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, upstream.Listener.Addr().String())
 	})
+	if hook != nil || wrap != nil {
+		baseDialer := dialer
+		dialer = proxy.DialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
+			if hook != nil {
+				hook()
+			}
+			dialStart := time.Now()
+			conn, err := baseDialer.DialContext(ctx, network, address)
+			if err == nil && wrap != nil {
+				conn = wrap(ctx, dialStart, conn)
+			}
+			return conn, err
+		})
+	}
 	out := proxy.NewOutboundTransport(runtimeProxySettingsForIntegration(), proxy.TransportConfig{Dialer: dialer, RootCAs: upstream.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs})
 	out.TLSClientConfig.ServerName = "127.0.0.1"
 	aud := &securityAudit{}
 	if writer == nil {
 		writer = aud
 	}
-	p, err := proxy.NewServer(proxy.Config{ListenAddr: "127.0.0.1:0", Username: "integration-user", Password: "integration-password", RunID: "integration-run", PolicyHash: "sha256:" + strings.Repeat("0", 64), InboundAuthenticator: verifier, Decoder: decoder, Mapper: securityMapper{}, Policy: selectedPolicy, Audit: writer, LogResourceARNs: true, Resigner: resigner, Upstream: proxy.NewNoReplayRoundTripper(out), Caches: mustIntegrationCaches(t)})
+	caches := mustIntegrationCaches(t)
+	upstreamTransport := proxy.NewNoReplayRoundTripper(out)
+	if upstreamWrap != nil {
+		upstreamTransport = upstreamWrap(upstreamTransport)
+	}
+	p, err := proxy.NewServer(proxy.Config{ListenAddr: "127.0.0.1:0", Username: "integration-user", Password: "integration-password", RunID: "integration-run", PolicyHash: "sha256:" + strings.Repeat("0", 64), InboundAuthenticator: verifier, Decoder: decoder, Mapper: securityMapper{}, Policy: selectedPolicy, Audit: writer, LogResourceARNs: true, Resigner: resigner, Upstream: upstreamTransport, Caches: caches})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +306,17 @@ func newSecurityHarnessForEndpoint(t *testing.T, selectedPolicy securityPolicy, 
 	tlsConfig := tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.CA().CertPool(), ServerName: host}
 	ct := &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tlsConfig, DisableKeepAlives: true}
 	t.Cleanup(ct.CloseIdleConnections)
-	return &securityHarness{upstream: upstream, proxy: p, client: &http.Client{Transport: ct}, fake: fake, audit: aud, clock: clock, host: host, service: service, region: region}
+	return &securityHarness{upstream: upstream, proxy: p, client: &http.Client{Transport: ct}, fake: fake, audit: aud, caches: caches, clock: clock, host: host, service: service, region: region}
+}
+
+// RunCaches returns the exact run-scoped cache set installed in the proxy.
+// Integration resource tests intentionally inspect this instance rather than
+// constructing a helper-only cache that the proxy never uses.
+func (h *securityHarness) RunCaches() *cache.RunCaches {
+	if h == nil {
+		return nil
+	}
+	return h.caches
 }
 
 type failingSecurityAudit struct{ events *securityAudit }
@@ -293,25 +341,55 @@ func mustIntegrationCaches(t *testing.T) *cache.RunCaches {
 
 func (h *securityHarness) call(t *testing.T, creds aws.Credentials, when time.Time, action string) *http.Response {
 	t.Helper()
+	return h.callWithClient(t, h.client, creds, when, action)
+}
+
+func (h *securityHarness) callWithClient(t *testing.T, client *http.Client, creds aws.Credentials, when time.Time, action string) *http.Response {
+	return h.callWithClientContext(t, context.Background(), client, creds, when, action)
+}
+
+func (h *securityHarness) callWithClientContext(t *testing.T, ctx context.Context, client *http.Client, creds aws.Credentials, when time.Time, action string) *http.Response {
+	t.Helper()
 	if h.service == "dynamodb" {
-		return h.callDynamoDB(t, creds, when, action, dynamoDBBody(action, "A", "derived-from-A"))
+		return h.callDynamoDBWithClientContext(t, ctx, client, creds, when, action, dynamoDBBody(action, "A", "derived-from-A"))
 	}
-	return h.callRequest(t, creds, when, "application/x-www-form-urlencoded", "", []byte("Action="+action+"&Version=2011-06-15"))
+	return h.callRequestWithClientContext(t, ctx, client, creds, when, "application/x-www-form-urlencoded", "", []byte("Action="+action+"&Version=2011-06-15"))
 }
 
 func (h *securityHarness) callDynamoDB(t *testing.T, creds aws.Credentials, when time.Time, action string, body []byte) *http.Response {
 	t.Helper()
+	return h.callDynamoDBWithClient(t, h.client, creds, when, action, body)
+}
+
+func (h *securityHarness) callDynamoDBWithClient(t *testing.T, client *http.Client, creds aws.Credentials, when time.Time, action string, body []byte) *http.Response {
+	return h.callDynamoDBWithClientContext(t, context.Background(), client, creds, when, action, body)
+}
+
+func (h *securityHarness) callDynamoDBWithClientContext(t *testing.T, ctx context.Context, client *http.Client, creds aws.Credentials, when time.Time, action string, body []byte) *http.Response {
+	t.Helper()
 	target := "DynamoDB_20120810." + action
-	return h.callRequest(t, creds, when, "application/x-amz-json-1.0", target, body)
+	return h.callRequestWithClientContext(t, ctx, client, creds, when, "application/x-amz-json-1.0", target, body)
 }
 
 func (h *securityHarness) callRequest(t *testing.T, creds aws.Credentials, when time.Time, contentType, target string, body []byte) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, "https://"+h.host+"/", bytes.NewReader(body))
+	return h.callRequestWithClient(t, h.client, creds, when, contentType, target, body)
+}
+
+func (h *securityHarness) callRequestWithClient(t *testing.T, client *http.Client, creds aws.Credentials, when time.Time, contentType, target string, body []byte) *http.Response {
+	return h.callRequestWithClientContext(t, context.Background(), client, creds, when, contentType, target, body)
+}
+
+func (h *securityHarness) callRequestWithClientContext(t *testing.T, ctx context.Context, client *http.Client, creds aws.Credentials, when time.Time, contentType, target string, body []byte) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+h.host+"/", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Host = h.host
+	if worker, ok := ctx.Value("kordn-performance-worker").(int); ok {
+		req.Header.Set("X-Kordn-Performance-Worker", strconv.Itoa(worker))
+	}
 	req.Header.Set("Content-Type", contentType)
 	if target != "" {
 		req.Header.Set("X-Amz-Target", target)
@@ -320,10 +398,10 @@ func (h *securityHarness) callRequest(t *testing.T, creds aws.Credentials, when 
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
 	req.Header.Set("X-Amz-Content-Sha256", hash)
-	if err := v4.NewSigner().SignHTTP(context.Background(), creds, req, hash, h.service, h.region, when); err != nil {
+	if err := v4.NewSigner().SignHTTP(ctx, creds, req, hash, h.service, h.region, when); err != nil {
 		t.Fatal(err)
 	}
-	response, err := h.client.Do(req)
+	response, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

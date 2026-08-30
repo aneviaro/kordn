@@ -1,0 +1,55 @@
+version: 2
+
+project_name: kordn
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: kordn
+    main: ./cmd/kordn
+    binary: kordn
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w -buildid=
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: '2026-01-01T00:00:00Z'
+
+archives:
+  - id: kordn
+    builds: [kordn]
+    formats: [tar.gz]
+    wrap_in_directory: true
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES.md
+      - docs/quickstart.md
+      - docs/threat-model.md
+
+checksum:
+  name_template: 'SHA256SUMS'
+  algorithm: sha256
+
+sboms:
+  - id: kordn-sbom
+    artifacts: archive
+    cmd: syft
+    args:
+      - '${artifact}'
+      - '--output'
+      - 'cyclonedx-json=${document}'
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-snapshot'
+
+release:
+  draft: true
+  prerelease: auto

@@ -17,6 +17,7 @@ func FuzzCanonicalRequest(f *testing.F) {
 		if len(rawPath) > 4096 || len(rawQuery) > 4096 || len(headerValue) > 4096 {
 			t.Skip()
 		}
+		originalPath, originalQuery, originalHeader := rawPath, rawQuery, headerValue
 		req := &http.Request{
 			Method: http.MethodGet,
 			URL:    &url.URL{Path: rawPath, RawPath: rawPath, RawQuery: rawQuery},
@@ -26,5 +27,8 @@ func FuzzCanonicalRequest(f *testing.F) {
 		req.Header.Set("X-Amz-Date", "20260827T120000Z")
 		req.Header.Set("X-Test", headerValue)
 		_, _ = BuildCanonicalRequest(req, []string{"host", "x-amz-date", "x-test"}, emptyPayloadHash)
+		if rawPath != originalPath || rawQuery != originalQuery || headerValue != originalHeader || req.URL.RawQuery != originalQuery || req.Header.Get("X-Test") != originalHeader {
+			t.Fatal("canonicalization mutated fuzz input")
+		}
 	})
 }

@@ -80,3 +80,15 @@ listed so a release does not silently acquire an unreviewed license.
 
 The project does not derive code from unlicensed `iam-agent-proxy`; no such
 source is a dependency.
+
+## Release provenance
+
+Release archives carry `LICENSE`, `NOTICE`, and this complete notice file,
+plus SHA256 checksums, a CycloneDX JSON SBOM, Cosign keyless signature, and
+GitHub build provenance. The mapper integration is the embedded attributed adapter based
+on iamlive commit `3ec1a40e560c2f00ec82c50223add810e2567efb`, resolved
+2026-08-18, with MIT text and upstream notice retained. AWS authorization data
+is the embedded snapshot `aws-sar-nine-service-2026-08-27`, retrieved
+2026-08-27 from the exact service-list and mapping URLs recorded in
+`internal/iammap/data/source/manifest.json`; its generated files and hashes
+are checked by mapper golden and widening tests.
