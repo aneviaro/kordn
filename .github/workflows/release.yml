@@ -29,6 +29,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      # Later release gates run with GOPROXY=off. Download the build
+      # dependencies, then cache the full module graph metadata needed by the
+      # license gate without downloading unrelated source archives.
+      - name: Download Go modules
+        run: |
+          set -euxo pipefail
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go list -m all >/dev/null
       - name: Install mandatory pinned govulncheck
         run: |
           set -euxo pipefail
