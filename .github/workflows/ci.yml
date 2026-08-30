@@ -35,6 +35,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      # Make's verification targets are intentionally offline. Download the
+      # build dependencies, then cache the full module graph metadata needed by
+      # the license gate without downloading unrelated source archives.
+      - name: Download Go modules
+        run: |
+          set -euxo pipefail
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go list -m all >/dev/null
       - name: Verify runner architecture
         run: test "$(uname -m)" = x86_64
       - name: Format
@@ -66,11 +74,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      # Keep this job independent of the pure job's module-cache save.
+      - name: Download Go modules
+        run: |
+          set -euxo pipefail
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go list -m all >/dev/null
       - name: Install exact AWS CLI v2
         shell: bash
         run: |
           set -euxo pipefail
-          curl --fail --location "https://awscli.amazonaws.com/AWSCLIV2-${AWSCLI_VERSION}.zip" -o /tmp/aws.zip
+          curl --fail --location "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWSCLI_VERSION}.zip" -o /tmp/aws.zip
           unzip -q /tmp/aws.zip -d /tmp/awscli
           sudo /tmp/awscli/aws/install --update
           aws --version | grep -F "${AWSCLI_VERSION}"
