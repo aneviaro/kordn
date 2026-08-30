@@ -13,6 +13,12 @@ upstream identity and explicitly allow only the AWS actions and resources the
 command needs. Kordn keeps the upstream credential in the parent process and
 records redacted, append-only audit events.
 
+For a working AWS CLI example, see
+[`examples/policies/aws-cli-read-only.yaml`](examples/policies/aws-cli-read-only.yaml).
+It documents the commands covered by each rule and keeps resource names
+scoped to one example S3 bucket. A representative JSONL audit file is in
+[`examples/audit/events.jsonl`](examples/audit/events.jsonl).
+
 ## Security boundary
 
 The security claim is intentionally narrow: for supported AWS requests that

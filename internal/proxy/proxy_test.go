@@ -551,10 +551,10 @@ func TestProxy_TunnelCancellationClosesBothDirections(t *testing.T) {
 }
 
 func TestProxy_LocalLatencySubtractsOnlyUpstreamRoundTrip(t *testing.T) {
-	endpoint := task8Endpoint()
+	endpoint := pipelineTestEndpoint()
 	request := httptest.NewRequest(http.MethodPost, "https://"+endpoint.Host+"/", nil)
 	request.Host = endpoint.Host
-	decoded := task8Decoded("GetCallerIdentity", "123456789012", endpoint.Region, endpoint.Partition)
+	decoded := pipelineDecodedRequest("GetCallerIdentity", "123456789012", endpoint.Region, endpoint.Partition)
 	resigner, err := sigv4.NewResigner(sdkcredentials.NewStaticCredentialsProvider("UPSTREAMACCESS01", "upstream-secret", ""))
 	if err != nil {
 		t.Fatal(err)
@@ -567,7 +567,7 @@ func TestProxy_LocalLatencySubtractsOnlyUpstreamRoundTrip(t *testing.T) {
 			SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: endpoint.Region,
 			SigningService: endpoint.Service, PayloadMode: awsrequest.PayloadHashEmpty,
 		}},
-		Decoder: pipelineDecoder{decoded: decoded}, Mapper: pipelineMapper{mapping: task8Mapping(decoded.Operation, "*")},
+		Decoder: pipelineDecoder{decoded: decoded}, Mapper: pipelineMapper{mapping: pipelineMapping(decoded.Operation, "*")},
 		Policy: pipelinePolicy{decision: policy.Decision{Result: policy.DecisionAllow, ReasonCode: awserror.ReasonAllRequirementsAllowed}},
 		Audit:  &pipelineAuditCollector{}, Resigner: resigner,
 		Upstream: roundTripFunc(func(req *http.Request) (*http.Response, error) {

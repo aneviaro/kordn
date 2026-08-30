@@ -25,11 +25,11 @@ import (
 	"github.com/kordn-ai/kordn/internal/sigv4"
 )
 
-func task8Endpoint() awsrequest.AWSEndpoint {
+func pipelineTestEndpoint() awsrequest.AWSEndpoint {
 	return awsrequest.AWSEndpoint{Partition: "aws", Host: "sts.amazonaws.com", Service: "sts", Region: "us-east-1", Scope: awsrequest.ScopeRegional}
 }
 
-func task8Decoded(operation, account, region, partition string) *awsrequest.DecodedAWSRequest {
+func pipelineDecodedRequest(operation, account, region, partition string) *awsrequest.DecodedAWSRequest {
 	return &awsrequest.DecodedAWSRequest{
 		Partition: partition, EndpointHost: "sts.amazonaws.com", Service: "sts", Region: region,
 		CallerAccountID: account, Protocol: awsrequest.ProtocolJSON11, Operation: operation,
@@ -38,29 +38,29 @@ func task8Decoded(operation, account, region, partition string) *awsrequest.Deco
 	}
 }
 
-func task8Mapping(operation, resource string) *awsrequest.MappingResult {
+func pipelineMapping(operation, resource string) *awsrequest.MappingResult {
 	return &awsrequest.MappingResult{
 		Service: "sts", Operation: operation, MapperVersion: "mapper-v1", Confidence: awsrequest.ConfidenceHigh,
 		Requirements: []awsrequest.IAMRequirement{{Action: "sts:" + operation, Resources: []string{resource}, ScopeKind: awsrequest.ScopeExact}},
 	}
 }
 
-type task8CountingMapper struct {
+type countingPipelineMapper struct {
 	mapping *awsrequest.MappingResult
 	calls   atomic.Int32
 }
 
-func (m *task8CountingMapper) Map(context.Context, *awsrequest.DecodedAWSRequest) (*awsrequest.MappingResult, error) {
+func (m *countingPipelineMapper) Map(context.Context, *awsrequest.DecodedAWSRequest) (*awsrequest.MappingResult, error) {
 	m.calls.Add(1)
 	return m.mapping, nil
 }
 
-type task8MutatingPolicy struct {
+type mutatingPipelinePolicy struct {
 	calls   atomic.Int32
 	mapping *awsrequest.MappingResult
 }
 
-func (p *task8MutatingPolicy) Evaluate(context.Context, policy.DecisionInput) policy.Decision {
+func (p *mutatingPipelinePolicy) Evaluate(context.Context, policy.DecisionInput) policy.Decision {
 	p.calls.Add(1)
 	if p.mapping != nil {
 		p.mapping.Requirements[0].Resources[0] = "changed-after-cache-insert"
@@ -68,19 +68,19 @@ func (p *task8MutatingPolicy) Evaluate(context.Context, policy.DecisionInput) po
 	return policy.Decision{Result: policy.DecisionDeny, ReasonCode: "policy_no_matching_allow", MatchedRuleIDs: []string{"rule-1"}}
 }
 
-func TestTask8PipelineCachesSuppressCallsCloneValuesAndAuditEveryRequest(t *testing.T) {
+func TestPipelineCachesSuppressCallsCloneValuesAndAuditEveryRequest(t *testing.T) {
 	caches, err := cache.NewRunCaches(cache.CacheOptions{EndpointCapacity: 1, OperationCapacity: 1, DecisionCapacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded := task8Decoded("GetCallerIdentity", "123456789012", "us-east-1", "aws")
-	mapping := task8Mapping(decoded.Operation, "arn:aws:iam::123456789012:role/a")
-	mapper := &task8CountingMapper{mapping: mapping}
-	pol := &task8MutatingPolicy{mapping: mapping}
+	decoded := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
+	mapping := pipelineMapping(decoded.Operation, "arn:aws:iam::123456789012:role/a")
+	mapper := &countingPipelineMapper{mapping: mapping}
+	pol := &mutatingPipelinePolicy{mapping: mapping}
 	collector := &pipelineAuditCollector{}
 	server, err := NewServer(Config{
 		Username: testUser, Password: testPassword, RunID: "run-cache", PolicyHash: "sha256:" + strings.Repeat("0", 64),
-		InboundAuthenticator: pipelineAuthenticator{verified: &awsrequest.VerifiedRequest{Request: httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil), Endpoint: task8Endpoint(), Protocol: awsrequest.ProtocolJSON11, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: "us-east-1", SigningService: "sts", PayloadMode: awsrequest.PayloadHashEmpty}},
+		InboundAuthenticator: pipelineAuthenticator{verified: &awsrequest.VerifiedRequest{Request: httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil), Endpoint: pipelineTestEndpoint(), Protocol: awsrequest.ProtocolJSON11, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: "us-east-1", SigningService: "sts", PayloadMode: awsrequest.PayloadHashEmpty}},
 		Decoder:              pipelineDecoder{decoded: decoded}, Mapper: mapper, Policy: pol, Audit: collector, Caches: caches,
 	})
 	if err != nil {
@@ -91,7 +91,7 @@ func TestTask8PipelineCachesSuppressCallsCloneValuesAndAuditEveryRequest(t *test
 	request.Host = "sts.amazonaws.com"
 	run := func() {
 		recorder := httptest.NewRecorder()
-		server.handlePipeline(recorder, request, destination{Host: "sts.amazonaws.com", Port: 443}, task8Endpoint())
+		server.handlePipeline(recorder, request, destination{Host: "sts.amazonaws.com", Port: 443}, pipelineTestEndpoint())
 		if recorder.Code != http.StatusForbidden {
 			t.Fatalf("pipeline status=%d", recorder.Code)
 		}
@@ -144,15 +144,15 @@ func TestTask8PipelineCachesSuppressCallsCloneValuesAndAuditEveryRequest(t *test
 	}
 }
 
-func TestTask8DecisionCacheKeySeparatesAllAuthorizationDimensions(t *testing.T) {
+func TestDecisionCacheKeySeparatesAllAuthorizationDimensions(t *testing.T) {
 	caches, err := cache.NewRunCaches(cache.CacheOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := &Server{config: Config{RunID: "run-a", PolicyHash: "policy-a", MapperVersion: "mapper-a", AdapterVersion: "adapter-a", DataVersion: "data-a"}, caches: caches}
-	endpoint := task8Endpoint()
-	request := task8Decoded("GetCallerIdentity", "123456789012", "us-east-1", "aws")
-	mapping := task8Mapping(request.Operation, "arn:aws:iam::123456789012:role/a")
+	endpoint := pipelineTestEndpoint()
+	request := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
+	mapping := pipelineMapping(request.Operation, "arn:aws:iam::123456789012:role/a")
 	runID := "run-a"
 	base := server.decisionCacheKey(runID, endpoint, request, mapping)
 	cases := map[string]func(){
@@ -182,7 +182,7 @@ func TestTask8DecisionCacheKeySeparatesAllAuthorizationDimensions(t *testing.T) 
 	}
 }
 
-func TestTask8ConnectionAndRequestBudgetsAreIndependent(t *testing.T) {
+func TestConnectionAndRequestBudgetsAreIndependent(t *testing.T) {
 	metrics := observe.NewMetrics()
 	server, err := NewServer(Config{Username: testUser, Password: testPassword, Metrics: metrics, MaxConcurrentConnections: 1, MaxConcurrentRequests: 1, AWSHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })})
 	if err != nil {
@@ -223,7 +223,7 @@ func TestTask8ConnectionAndRequestBudgetsAreIndependent(t *testing.T) {
 	}
 }
 
-func TestTask8UpstreamStatusClassificationPreservesResponses(t *testing.T) {
+func TestUpstreamStatusClassificationPreservesResponses(t *testing.T) {
 	for _, test := range []struct {
 		status int
 		metric string
@@ -237,11 +237,11 @@ func TestTask8UpstreamStatusClassificationPreservesResponses(t *testing.T) {
 		{http.StatusInternalServerError, observe.UpstreamServer},
 	} {
 		t.Run(strconv.Itoa(test.status), func(t *testing.T) {
-			endpoint := task8Endpoint()
+			endpoint := pipelineTestEndpoint()
 			request := httptest.NewRequest(http.MethodPost, "https://sts.amazonaws.com/", nil)
 			request.Host = endpoint.Host
-			decoded := task8Decoded("GetCallerIdentity", "123456789012", endpoint.Region, endpoint.Partition)
-			mapping := task8Mapping(decoded.Operation, "*")
+			decoded := pipelineDecodedRequest("GetCallerIdentity", "123456789012", endpoint.Region, endpoint.Partition)
+			mapping := pipelineMapping(decoded.Operation, "*")
 			resigner, err := sigv4.NewResigner(sdkcredentials.NewStaticCredentialsProvider("UPSTREAMACCESS01", "upstream-secret", ""))
 			if err != nil {
 				t.Fatal(err)
@@ -277,7 +277,7 @@ func TestTask8UpstreamStatusClassificationPreservesResponses(t *testing.T) {
 	}
 }
 
-func TestTask8SpoolMetricsRequirePreparedDiskBody(t *testing.T) {
+func TestSpoolMetricsRequirePreparedDiskBody(t *testing.T) {
 	const largeDecodedSize = int64(1 << 20)
 	cases := []struct {
 		name        string
@@ -303,17 +303,17 @@ func TestTask8SpoolMetricsRequirePreparedDiskBody(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			decoded := task8Decoded("GetCallerIdentity", "123456789012", "us-east-1", "aws")
+			decoded := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
 			decoded.PayloadBytes = largeDecodedSize
 			server, err := NewServer(Config{
 				Username: testUser, Password: testPassword, RunID: "run-spool",
 				PolicyHash: "sha256:" + strings.Repeat("0", 64),
 				InboundAuthenticator: pipelineAuthenticator{verified: &awsrequest.VerifiedRequest{
-					Request: request, Endpoint: task8Endpoint(), Protocol: awsrequest.ProtocolJSON11,
+					Request: request, Endpoint: pipelineTestEndpoint(), Protocol: awsrequest.ProtocolJSON11,
 					SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: "us-east-1",
 					SigningService: "sts", PayloadMode: awsrequest.PayloadHashEmpty,
 				}},
-				Decoder: pipelineDecoder{decoded: decoded}, Mapper: pipelineMapper{mapping: task8Mapping(decoded.Operation, "*")},
+				Decoder: pipelineDecoder{decoded: decoded}, Mapper: pipelineMapper{mapping: pipelineMapping(decoded.Operation, "*")},
 				Policy: pipelinePolicy{decision: policy.Decision{Result: policy.DecisionDeny, ReasonCode: awserror.ReasonPolicyNoMatchingAllow}},
 				Audit:  &pipelineAuditCollector{}, Limits: Limits{MaxInMemoryBodyBytes: 8, MaxSpoolBodyBytes: 64},
 			})
@@ -322,7 +322,7 @@ func TestTask8SpoolMetricsRequirePreparedDiskBody(t *testing.T) {
 			}
 			defer server.Close()
 			response := httptest.NewRecorder()
-			server.handlePipeline(response, request, destination{Host: "sts.amazonaws.com", Port: 443}, task8Endpoint())
+			server.handlePipeline(response, request, destination{Host: "sts.amazonaws.com", Port: 443}, pipelineTestEndpoint())
 			if got := server.MetricsSnapshot().Counters[observe.SpoolBytes]; got != test.wantSpool {
 				t.Fatalf("spool metric = %d, want %d", got, test.wantSpool)
 			}
@@ -335,7 +335,7 @@ func TestTask8SpoolMetricsRequirePreparedDiskBody(t *testing.T) {
 	}
 }
 
-func TestTask8RealMaxConcurrentConnectionsAdmission(t *testing.T) {
+func TestMaxConcurrentConnectionsAdmission(t *testing.T) {
 	const host = "sts.connection-budget.test"
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -429,7 +429,7 @@ func TestTask8RealMaxConcurrentConnectionsAdmission(t *testing.T) {
 	t.Fatalf("connection/request gauges leaked: %+v", server.MetricsSnapshot())
 }
 
-func TestTask8RealConnectTLSInterceptionAndIndependentRequestBudget(t *testing.T) {
+func TestConnectTLSInterceptionAndIndependentRequestBudget(t *testing.T) {
 	const host = "sts.injected.test"
 	entered := make(chan struct{})
 	release := make(chan struct{})
