@@ -1,5 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
 // Package data contains the bounded, offline AWS Service Authorization snapshot.
 package data
 

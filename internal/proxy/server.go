@@ -1,6 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-
 // Package proxy implements Kordn's authenticated loopback proxy. AWS endpoint
 // classification happens before any outbound operation; only a recognized AWS
 // TLS CONNECT is terminated. All other permitted CONNECT streams are bytes.

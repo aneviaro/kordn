@@ -1,10 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-//
-// Derived from iamlive revision 3ec1a40e560c2f00ec82c50223add810e2567efb,
-// MIT licensed. Derived behavior includes the operation/action table and
-// dependent-action expansion; no iamlive process, proxy, or lifecycle code is
-// included. See third_party/iamlive/PROVENANCE.md.
 package iamliveadapter
 
 import (

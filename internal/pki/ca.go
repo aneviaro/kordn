@@ -1,6 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-
 // Package pki owns the private, per-run certificate authority used only for
 // recognized AWS TLS interception. It never edits operating-system trust.
 package pki

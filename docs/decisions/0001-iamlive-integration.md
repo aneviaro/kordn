@@ -38,8 +38,8 @@ fail-closed mapper error boundary through a clean import.
 
 Task 6 may derive only the smallest required mapping data/logic from the pinned
 MIT iamlive revision and must preserve `third_party/iamlive/LICENSE` and
-`NOTICE`, add provenance headers to substantially derived files, and keep all
-Kordn authorization and fail-closed code outside
+`NOTICE`, record provenance for substantially derived files in
+`third_party/iamlive/PROVENANCE.md`, and keep all Kordn authorization and fail-closed code outside
 `internal/iammap/iamliveadapter`. Independently sourced AWS authorization data
 will retain its own source and version.
 

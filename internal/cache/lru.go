@@ -1,6 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-
 // Package cache contains small bounded caches used by security-sensitive
 // request paths.  LRU deliberately exposes values, rather than callbacks, so
 // it never holds its mutex while running caller code.

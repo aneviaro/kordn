@@ -1,8 +1,5 @@
 //go:build realaws
 
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-
 package realaws
 
 import (

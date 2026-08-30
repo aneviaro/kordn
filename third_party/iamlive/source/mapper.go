@@ -1,12 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the MIT License (MIT); see ../LICENSE.
-//
-// Derived from github.com/iann0036/iamlive/iamlivecore/logger.go at
-// 3ec1a40e560c2f00ec82c50223add810e2567efb, symbols getActions and
-// getDependantActions (upstream lines 458-506). Kordn retains the upstream
-// operation/action lookup and dependency-expansion shape, but narrows the
-// table to the reviewed supported-operation matrix and uses typed request
-// values instead of iamlive's runtime request map.
 package mapper
 
 import (

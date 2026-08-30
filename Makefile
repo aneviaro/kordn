@@ -46,7 +46,7 @@ checklist-validation:
 	echo 'checklist-validation: PASS (23 Section 20 invariants, 22 Section 26 criteria)'
 
 # This gate deliberately enumerates every approved module. A new dependency
-# requires a reviewed license and a notice before it can enter the build.
+# requires a reviewed license and attribution before it can enter the build.
 license: license-check
 
 license-check:
@@ -86,21 +86,22 @@ license-check:
 		test -s "$$license"; \
 	done; \
 	test -s LICENSE; \
-	test -s NOTICE; \
 	test -s THIRD_PARTY_NOTICES.md; \
 	test -s third_party/iamlive/LICENSE; \
 	test -s third_party/iamlive/NOTICE; \
 	test -s third_party/iamlive/UPSTREAM_COMMIT; \
 	test -s third_party/licenses/aws-sdk-v2/LICENSE; \
-	test -s third_party/licenses/smithy-go/LICENSE; \
-	grep -q 'Apache License' LICENSE; \
+	test -s third_party/licenses/go-bsd-3-clause/LICENSE; \
+	test -s third_party/licenses/go-yaml-v3/LICENSE; \
+	test -s third_party/licenses/x-net/LICENSE; \
+	test -s third_party/licenses/x-net/PATENTS; \
+	grep -q 'MIT License' LICENSE; \
 	grep -q 'Apache License' third_party/licenses/aws-sdk-v2/LICENSE; \
-	grep -q 'Apache License' third_party/licenses/smithy-go/LICENSE; \
 	grep -q 'MIT License' third_party/iamlive/LICENSE; \
 	grep -q 'iam-agent-proxy' SECURITY.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md; \
 	grep -q 'go-yaml-v3/LICENSE' THIRD_PARTY_NOTICES.md; \
-	grep -q 'jsonschema-v6/LICENSE' THIRD_PARTY_NOTICES.md; \
-	echo "license-check: PASS (approved modules; AWS SDK v2/Smithy provenance recorded)"
+	grep -q 'go-bsd-3-clause/LICENSE' THIRD_PARTY_NOTICES.md; \
+	echo "license-check: PASS (runtime licenses; AWS SDK/Smithy provenance recorded)"
 
 build:
 	@mkdir -p $$(dirname $(BINARY))
@@ -193,7 +194,7 @@ release-snapshot:
 	printf '%s' '{"format":"kordn.release.sbom/v1","generator":"go list -m","dependencies":[' > dist/release-snapshot/sbom.json; \
 	$(GO) list -m -f '{"path":"{{.Path}}","version":"{{.Version}}"}' all | awk 'NR > 1 { printf "," } { printf "%s", $$0 } END { print "]}" }' >> dist/release-snapshot/sbom.json; \
 	printf '%s\n' '{"format":"kordn.provenance/v1","build":"offline-reproducible","mapper":"kordn-iammap/v2","authorization_data":"embedded","targets":["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64"]}' > dist/release-snapshot/provenance.json; \
-	printf '%s\n' 'Apache-2.0 project and reviewed third-party notices are included in release archives.' > dist/release-snapshot/LICENSE-REPORT.txt; \
+	printf '%s\n' 'MIT-licensed project; reviewed third-party licenses and attributions are included in release archives.' > dist/release-snapshot/LICENSE-REPORT.txt; \
 	( cd dist/release-snapshot && if command -v sha256sum >/dev/null 2>&1; then sha256sum kordn-* BUILD-INFO.txt LICENSE-REPORT.txt provenance.json sbom.json version.json > SHA256SUMS && sha256sum -c SHA256SUMS; else shasum -a 256 kordn-* BUILD-INFO.txt LICENSE-REPORT.txt provenance.json sbom.json version.json > SHA256SUMS && shasum -a 256 -c SHA256SUMS; fi ); \
 	for file in dist/release-snapshot/kordn-* dist/release-snapshot/SHA256SUMS dist/release-snapshot/BUILD-INFO.txt dist/release-snapshot/LICENSE-REPORT.txt dist/release-snapshot/sbom.json dist/release-snapshot/provenance.json dist/release-snapshot/version.json; do test -s "$$file"; done; \
 	home=$$(mktemp -d "$${TMPDIR:-/tmp}/kordn-home.XXXXXX"); trap 'rm -rf "$$home" .release-snapshot-a .release-snapshot-b' EXIT INT TERM; \

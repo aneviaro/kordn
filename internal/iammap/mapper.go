@@ -1,5 +1,3 @@
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
 // Package iammap is Kordn's fail-closed authorization mapping boundary.
 package iammap
 

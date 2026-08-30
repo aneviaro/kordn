@@ -50,7 +50,7 @@ Every normative item has a stable ID and a concrete executable check. `make chec
 | AC-18 | A/B/C partial execution semantics | `TestSecurityABCLedgerAndAuditUseTheRealProxyHarness` |
 | AC-19 | macOS/Linux matrix | ``make test-compatibility` on release runners` |
 | AC-20 | Section 21 hot-path targets | ``KORDN_STRICT_PERFORMANCE=1 make strict-performance`` |
-| AC-21 | Apache license and iamlive notices/no copied code | ``make license-check` and snapshot metadata` |
+| AC-21 | MIT license and iamlive notices/no copied code | ``make license-check` and snapshot metadata` |
 | AC-22 | bypass limitation documented | `docs/security-review-checklist.md and `make security-check`` |
 
 The direct-connect and same-user credential-file statements are documented V0.1 limitations, not containment claims. Release verification has no optional skip path.

@@ -29,8 +29,14 @@ archives:
     files:
       - README.md
       - LICENSE
-      - NOTICE
       - THIRD_PARTY_NOTICES.md
+      - third_party/iamlive/LICENSE
+      - third_party/iamlive/NOTICE
+      - third_party/licenses/aws-sdk-v2/LICENSE
+      - third_party/licenses/go-bsd-3-clause/LICENSE
+      - third_party/licenses/go-yaml-v3/LICENSE
+      - third_party/licenses/x-net/LICENSE
+      - third_party/licenses/x-net/PATENTS
       - docs/quickstart.md
       - docs/threat-model.md
 

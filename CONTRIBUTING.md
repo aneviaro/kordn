@@ -1,7 +1,7 @@
 # Contributing to Kordn
 
 Thank you for helping improve Kordn. Original Kordn code is licensed under the
-Apache License 2.0. Read `SECURITY.md` before reporting a vulnerability.
+MIT License. Read `SECURITY.md` before reporting a vulnerability.
 
 ## Development
 

@@ -1,8 +1,5 @@
 //go:build ignore
 
-// Copyright 2026 Kordn AI contributors
-// Licensed under the Apache License, Version 2.0.
-//
 // Offline generator for the deliberately bounded nine-service snapshot. The
 // service files are byte-for-byte AWS Service Reference files. operation-model
 // is the reviewed supported-operation matrix: it combines the iamlive
