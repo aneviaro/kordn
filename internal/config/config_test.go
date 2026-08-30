@@ -78,13 +78,15 @@ func TestSchemaCheck(t *testing.T) {
 	configSchema := compileSchema(t, filepath.Join(root, "api", "config.schema.json"))
 	auditSchema := compileSchema(t, filepath.Join(root, "api", "audit.schema.json"))
 
-	data, err := os.ReadFile(filepath.Join(root, "examples", "policies", "deny-by-default.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	instance := yamlJSONInstance(t, data)
-	if err := configSchema.Validate(instance); err != nil {
-		t.Fatalf("published example does not validate against config schema: %v", err)
+	for _, name := range []string{"deny-by-default.yaml", "aws-cli-read-only.yaml"} {
+		data, err := os.ReadFile(filepath.Join(root, "examples", "policies", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance := yamlJSONInstance(t, data)
+		if err := configSchema.Validate(instance); err != nil {
+			t.Fatalf("published example %s does not validate against config schema: %v", name, err)
+		}
 	}
 
 	for _, tc := range auditSchemaFixtures() {

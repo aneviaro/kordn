@@ -1,0 +1,59 @@
+# Example policy for a narrowly scoped AWS CLI read-only run.
+# Replace the profile and bucket name before using this file.
+#
+# Commands covered by these rules:
+#   aws sts get-caller-identity
+#   aws s3 ls s3://kordn-example-reports
+#   aws s3 cp s3://kordn-example-reports/reports/latest.csv -
+#
+# The command lines above are documentation comments; Kordn authorizes the
+# resolved AWS API requests, not command names or shell text.
+apiVersion: kordn.dev/v1alpha1
+kind: LocalRunPolicy
+
+upstream:
+  profile: kordn-prod-ceiling
+  region: us-east-1
+
+proxy:
+  listen: 127.0.0.1:0
+  nonAwsTraffic: tunnel
+  upstreamProxy: inherit
+  maxInMemoryBodyBytes: 8388608
+  maxSpoolBodyBytes: 67108864
+
+policy:
+  default: deny
+  rules:
+    # GetCallerIdentity is a known-global action. The explicit acknowledgement
+    # is required because AWS models this action with Resource: "*".
+    - id: allow-caller-identity
+      effect: allow
+      actions:
+        - sts:GetCallerIdentity
+      resources:
+        - "*"
+      allowAwsRequiredWildcard: true
+
+    - id: allow-report-listing
+      effect: allow
+      actions:
+        - s3:ListBucket
+      resources:
+        - arn:aws:s3:::kordn-example-reports
+
+    - id: allow-report-download
+      effect: allow
+      actions:
+        - s3:GetObject
+      resources:
+        - arn:aws:s3:::kordn-example-reports/reports/*
+
+audit:
+  path: ~/.kordn/audit/events.jsonl
+  fsync: batch
+  failureMode: deny
+  # Keep resource names out of the audit log while retaining run-scoped
+  # correlation values for investigations.
+  logResourceArns: false
+  hashResourceNames: true
