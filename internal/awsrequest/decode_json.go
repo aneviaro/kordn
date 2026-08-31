@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
 type DecodeLimits struct {
@@ -28,10 +30,18 @@ type DecoderOptions struct {
 	CallerAccountID string // trusted run context; never read from request data
 }
 
+// wireCatalog is intentionally unexported: production decoders always use the
+// pinned embedded catalog, while same-package tests can inject malformed or
+// ambiguous records without creating a runtime operation override.
+type wireCatalog interface {
+	Services() []iamlivecatalog.Service
+}
+
 type Decoder struct {
 	limits          DecodeLimits
 	classifier      EndpointClassifier
 	callerAccountID string
+	catalog         wireCatalog
 	configErr       error
 }
 
@@ -46,7 +56,11 @@ func NewConfiguredDecoder(o DecoderOptions) (*Decoder, error) {
 	if o.Classifier == nil {
 		o.Classifier = DefaultEndpointClassifier
 	}
-	return newDecoder(x, o.Classifier, o.CallerAccountID), nil
+	d := newDecoder(x, o.Classifier, o.CallerAccountID)
+	if d.configErr != nil {
+		return nil, fmt.Errorf("decoder configuration: %w", d.configErr)
+	}
+	return d, nil
 }
 
 func NewDecoder(l ...DecodeLimits) *Decoder {
@@ -90,7 +104,11 @@ func newDecoder(x DecodeLimits, c EndpointClassifier, account string) *Decoder {
 	if x.MaxPathBytes > 0 {
 		d.MaxPathBytes = x.MaxPathBytes
 	}
-	return &Decoder{limits: d, classifier: c, callerAccountID: account, configErr: configErr}
+	cat, catErr := iamlivecatalog.Load()
+	if configErr == nil {
+		configErr = catErr
+	}
+	return &Decoder{limits: d, classifier: c, callerAccountID: account, catalog: cat, configErr: configErr}
 }
 func (d *Decoder) WithClassifier(c EndpointClassifier) *Decoder {
 	if c != nil {
@@ -181,7 +199,7 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 	if err != nil {
 		return nil, err
 	}
-	if want := authoritativeProtocol(e.Service); want == "" || protocol != want {
+	if want, ok := authoritativeProtocolFor(d.catalog, e.Service); !ok || protocol != want {
 		return nil, fmt.Errorf("protocol %q is not authoritative for endpoint service %q", protocol, e.Service)
 	}
 	body, berr := readAndRestore(r, d.limits.MaxBodyBytes)
@@ -194,17 +212,17 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 	}
 	switch protocol {
 	case ProtocolJSON10, ProtocolJSON11:
-		out.Operation, out.Parameters, err = decodeJSONBody(body, r.Header, e.Service, d.limits)
+		out.Operation, out.Parameters, err = decodeJSONBody(body, r.Header, e.Service, protocol, d.catalog, d.limits)
 	case ProtocolQuery, ProtocolEC2Query:
 		var q url.Values
 		q, err = parseQueryString(r.URL.RawQuery, d.limits)
 		if err == nil {
-			out.Operation, out.Parameters, out.CanonicalQuery, err = decodeQueryBody(body, q, e.Service, protocol, d.limits)
+			out.Operation, out.Parameters, out.CanonicalQuery, err = decodeQueryBody(body, q, e.Service, protocol, d.catalog, d.limits)
 		}
 	case ProtocolRESTJSON:
-		out.Operation, out.Parameters, err = decodeRESTJSONBody(body, e.Service, out.CanonicalPath, out.Method, r.URL.Query(), d.limits)
+		out.Operation, out.Parameters, err = decodeRESTJSONBody(body, e.Service, out.CanonicalPath, out.Method, r.URL.Query(), d.catalog, d.limits)
 	case ProtocolRESTXML:
-		out.Operation, out.Parameters, err = decodeRESTXMLBody(body, e.Service, out.CanonicalPath, out.Method, r.URL.Query(), d.limits)
+		out.Operation, out.Parameters, err = decodeRESTXMLBody(body, e.Service, out.CanonicalPath, out.Method, r.URL.Query(), d.catalog, d.limits)
 	default:
 		err = errors.New("unsupported AWS protocol")
 	}
@@ -222,9 +240,6 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 		if _, ok := q["Action"]; ok {
 			return nil, errors.New("query Action conflicts with protocol operation")
 		}
-	}
-	if out.Operation == "" || !operationKnown(e.Service, out.Operation) {
-		return nil, errors.New("operation evidence is unknown")
 	}
 	if err = out.Validate(); err != nil {
 		return nil, fmt.Errorf("decoded request: %w", err)
@@ -321,26 +336,77 @@ func readBoundedBody(ctx context.Context, b io.Reader, max int64) ([]byte, error
 }
 
 func AuthoritativeProtocol(service string) (AWSProtocol, bool) {
-	p := authoritativeProtocol(service)
-	return p, p != ""
+	p, ok := authoritativeProtocolForDefault(service)
+	return p, ok
 }
 
-func authoritativeProtocol(service string) AWSProtocol {
-	switch service {
+// authoritativeProtocolFor requires one unambiguous wire protocol among the
+// exact endpoint-prefix records. It deliberately does not consult aliases or
+// a hand-maintained service table.
+func authoritativeProtocolFor(c wireCatalog, service string) (AWSProtocol, bool) {
+	if c == nil || service == "" {
+		return "", false
+	}
+	var found AWSProtocol
+	seen := map[AWSProtocol]bool{}
+	for _, s := range c.Services() {
+		if s.EndpointPrefix != service {
+			continue
+		}
+		if s.Protocol == "json" {
+			for _, o := range s.Operations {
+				p, ok := catalogProtocol(s.Protocol, o.Route.JSONVersion)
+				if !ok {
+					return "", false
+				}
+				seen[p] = true
+			}
+			continue
+		}
+		p, ok := catalogProtocol(s.Protocol, "")
+		if !ok {
+			return "", false
+		}
+		seen[p] = true
+	}
+	if len(seen) != 1 {
+		return "", false
+	}
+	for p := range seen {
+		found = p
+	}
+	return found, true
+}
+
+func authoritativeProtocolForDefault(service string) (AWSProtocol, bool) {
+	c, err := iamlivecatalog.Load()
+	if err != nil {
+		return "", false
+	}
+	return authoritativeProtocolFor(c, service)
+}
+
+func catalogProtocol(protocol, jsonVersion string) (AWSProtocol, bool) {
+	switch protocol {
+	case "query":
+		return ProtocolQuery, true
 	case "ec2":
-		return ProtocolEC2Query
-	case "ecs", "logs":
-		return ProtocolJSON11
-	case "sts", "cloudwatch", "iam":
-		return ProtocolQuery
-	case "s3":
-		return ProtocolRESTXML
-	case "lambda":
-		return ProtocolRESTJSON
-	case "dynamodb":
-		return ProtocolJSON10
+		return ProtocolEC2Query, true
+	case "rest-json":
+		return ProtocolRESTJSON, true
+	case "rest-xml":
+		return ProtocolRESTXML, true
+	case "json":
+		switch jsonVersion {
+		case "1.0":
+			return ProtocolJSON10, true
+		case "1.1":
+			return ProtocolJSON11, true
+		default:
+			return "", false
+		}
 	default:
-		return ""
+		return "", false
 	}
 }
 
@@ -396,23 +462,15 @@ func safeHeaders(h http.Header) http.Header {
 	return o
 }
 
-// Model prefixes are the authoritative Smithy/AWS model identities accepted by
-// the wire protocol. Endpoint service is checked independently. Short names,
-// guessed aliases, and version spellings not used by AWS are intentionally not
-// accepted: a target from one service must never be reinterpreted as another.
-var targetModels = map[string]string{
-	"AmazonEC2":                          "ec2",
-	"AmazonEC2ContainerServiceV20141113": "ecs",
-	"AWSSecurityTokenServiceV20110615":   "sts",
-	"DynamoDB_20120810":                  "dynamodb",
-	"GraniteServiceVersion20100831":      "cloudwatch",
-	"Logs_20140328":                      "logs",
-	"IAM_20100508":                       "iam",
-	"AWSLambda_20150331":                 "lambda",
+func targetOperation(target, service string, max int) (string, error) {
+	c, err := iamlivecatalog.Load()
+	if err != nil {
+		return "", errors.New("JSON catalog is unavailable")
+	}
+	return targetOperationFor(target, service, "", c, max)
 }
 
-func targetOperation(target, service string, max int) (string, error) {
-	target = strings.TrimSpace(target)
+func targetOperationFor(target, service string, protocol AWSProtocol, c wireCatalog, max int) (string, error) {
 	if len(target) == 0 || len(target) > max || strings.ContainsAny(target, "\x00\r\n") {
 		return "", errors.New("JSON target is malformed")
 	}
@@ -420,21 +478,42 @@ func targetOperation(target, service string, max int) (string, error) {
 	if strings.Contains(target, "#") {
 		sep = "#"
 	}
-	p := strings.Split(target, sep)
-	if len(p) != 2 || p[0] == "" || p[1] == "" || targetModels[p[0]] != service {
-		return "", errors.New("JSON target service disagrees with endpoint")
+	if strings.Count(target, sep) != 1 {
+		return "", errors.New("JSON target is malformed")
 	}
-	if !validOperation(p[1]) {
-		return "", errors.New("JSON operation is malformed")
+	p := strings.SplitN(target, sep, 2)
+	if len(p) != 2 || p[0] == "" || p[1] == "" || !validOperation(p[1]) {
+		return "", errors.New("JSON target is malformed")
+	}
+	matches := 0
+	for _, s := range c.Services() {
+		if s.EndpointPrefix != service || s.TargetPrefix != p[0] {
+			continue
+		}
+		for _, o := range s.Operations {
+			wire, ok := catalogProtocol(s.Protocol, o.Route.JSONVersion)
+			if !ok || (protocol != "" && wire != protocol) {
+				continue
+			}
+			if o.Service == service && o.Name == p[1] && o.Route.TargetPrefix == p[0] {
+				matches++
+				if o.State != iamlivecatalog.EvidenceKnown {
+					return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
+				}
+			}
+		}
+	}
+	if matches != 1 {
+		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
 	}
 	return p[1], nil
 }
-func decodeJSONBody(body []byte, h http.Header, service string, l DecodeLimits) (string, map[string]Value, error) {
+func decodeJSONBody(body []byte, h http.Header, service string, protocol AWSProtocol, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
 	t := h.Values("X-Amz-Target")
 	if len(t) != 1 {
 		return "", nil, errors.New("JSON operation target is missing or duplicated")
 	}
-	op, e := targetOperation(t[0], service, l.MaxTokenBytes)
+	op, e := targetOperationFor(t[0], service, protocol, c, l.MaxTokenBytes)
 	if e != nil {
 		return "", nil, e
 	}
@@ -549,13 +628,3 @@ func validOperation(s string) bool {
 	}
 	return true
 }
-func operationKnown(service, op string) bool {
-	for _, x := range modelOperations[service] {
-		if x == op {
-			return true
-		}
-	}
-	return false
-}
-
-var modelOperations = map[string][]string{"ec2": {"DescribeInstances", "RunInstances", "TerminateInstances"}, "ecs": {"RunTask", "CreateService", "DescribeServices", "UpdateService"}, "sts": {"GetCallerIdentity", "AssumeRole"}, "s3": {"GetObject", "PutObject", "DeleteObject", "ListObjectsV2", "GetBucketLocation"}, "cloudwatch": {"PutMetricData", "GetMetricData"}, "logs": {"CreateLogGroup", "CreateLogStream", "PutLogEvents"}, "iam": {"GetRole", "CreateRole", "PassRole"}, "lambda": {"Invoke", "CreateFunction", "UpdateFunctionConfiguration"}, "dynamodb": {"GetItem", "PutItem", "DeleteItem", "DescribeTable"}}

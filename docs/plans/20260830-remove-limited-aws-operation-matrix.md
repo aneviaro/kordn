@@ -141,12 +141,12 @@ Files:
 - Test: `internal/awsrequest/correction_test.go` — retain disagreement, spoofing, ambiguity, body/path/token, and unsupported-evidence regressions.
 
 Steps:
-- [ ] Add a read-only catalog dependency to `Decoder` construction so tests can inject corrupt/ambiguous records without adding a runtime bypass or operation override.
-- [ ] Replace authoritative protocol and JSON target maps with exact catalog records; reject missing, duplicated, contradictory, or service-mismatched model records.
-- [ ] Accept well-formed Query/JSON operations only when the authenticated endpoint service's catalog contains the exact wire operation.
-- [ ] Implement strict REST route matching from catalogued URI templates, HTTP methods, and modeled query discriminators; reject zero matches, multiple matches, unsupported subresources, and conflicting path/body values.
-- [ ] Use commands different from Task 1 for decoder coverage: STS `GetCallerIdentity` over Query, EC2 `DescribeInstances` over EC2 Query, DynamoDB `GetItem` over JSON 1.0, and Lambda `Invoke` over REST-JSON; retain an S3 REST-XML route regression in the existing suite.
-- [ ] Retain negative tests proving malformed `Action`, duplicated query/body evidence, wrong service, wrong protocol, wrong target prefix, ambiguous REST route, and genuinely absent operations fail before mapping and never become guessed operations.
+- [x] Add a read-only catalog dependency to `Decoder` construction so tests can inject corrupt/ambiguous records without adding a runtime bypass or operation override.
+- [x] Replace authoritative protocol and JSON target maps with exact catalog records; reject missing, duplicated, contradictory, or service-mismatched model records.
+- [x] Accept well-formed Query/JSON operations only when the authenticated endpoint service's catalog contains the exact wire operation.
+- [x] Implement strict REST route matching from catalogued URI templates, HTTP methods, and modeled query discriminators; reject zero matches, multiple matches, unsupported subresources, and conflicting path/body values.
+- [x] Use commands different from Task 1 for decoder coverage: STS `GetCallerIdentity` over Query, EC2 `DescribeInstances` over EC2 Query, DynamoDB `GetItem` over JSON 1.0, and Lambda `Invoke` over REST-JSON; retain an S3 REST-XML route regression in the existing suite.
+- [x] Retain negative tests proving malformed `Action`, duplicated query/body evidence, wrong service, wrong protocol, wrong target prefix, ambiguous REST route, and genuinely absent operations fail before mapping and never become guessed operations.
 
 Verification:
 - `go test -race ./internal/awsrequest`
