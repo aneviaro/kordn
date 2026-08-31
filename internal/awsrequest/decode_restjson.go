@@ -8,9 +8,11 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+
+	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
-func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values, l DecodeLimits) (string, map[string]Value, error) {
+func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
 	p := map[string]Value{}
 	if len(bytes.TrimSpace(body)) > 0 {
 		d := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(body)))
@@ -25,7 +27,7 @@ func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values,
 		}
 		p = v.Object
 	}
-	op, route, e := restOperation(service, path, method, q, l)
+	op, route, e := restOperationFromCatalog(service, path, method, q, ProtocolRESTJSON, c, l)
 	if e != nil {
 		return "", nil, e
 	}
@@ -38,67 +40,173 @@ func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values,
 	return op, p, nil
 }
 
-// restOperation is a closed subset of the AWS service models represented by
-// the SAR snapshot. Routes are matched by method, exact path shape, and the
-// modeled query subresource; a merely AWS-looking path is not an operation.
+// restOperation is retained as an in-package convenience for callers that
+// exercise the REST-JSON matcher directly. The decoder uses the injected
+// catalog explicitly.
 func restOperation(service, path, method string, q url.Values, l DecodeLimits) (string, map[string]Value, error) {
+	return restOperationFromCatalog(service, path, method, q, ProtocolRESTJSON, defaultWireCatalog(), l)
+}
+
+func defaultWireCatalog() wireCatalog {
+	c, err := iamlivecatalog.Load()
+	if err != nil {
+		return nil
+	}
+	return c
+}
+
+// restOperationFromCatalog matches only raw, exact service operation records.
+// It intentionally does not use Catalog.Operation, whose normalized index is
+// allowed to collapse equivalent records and resolve aliases.
+func restOperationFromCatalog(service, path, method string, q url.Values, protocol AWSProtocol, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
 	if len(path) > l.MaxPathBytes || !strings.HasPrefix(path, "/") {
 		return "", nil, errors.New("REST path is malformed")
 	}
 	if e := validateRESTQuery(q, l); e != nil {
 		return "", nil, e
 	}
-	decoded, e := url.PathUnescape(strings.TrimSuffix(path, "/"))
-	if e != nil || strings.ContainsAny(decoded, "\x00\r\n") || strings.Contains(decoded, "?") {
-		return "", nil, errors.New("REST path is malformed")
-	}
-	parts := strings.Split(strings.TrimPrefix(decoded, "/"), "/")
-	for _, p := range parts {
-		if p == "" || !validPathValue(p, l) {
-			return "", nil, errors.New("REST path parameter is malformed")
-		}
-	}
 	method = strings.ToUpper(method)
-	switch service {
-	case "lambda":
-		switch {
-		case len(parts) == 2 && parts[0] == "2015-03-31" && parts[1] == "functions" && method == "POST" && len(q) == 0:
-			return "CreateFunction", nil, nil
-		case len(parts) == 4 && parts[0] == "2015-03-31" && parts[1] == "functions" && parts[3] == "invocations" && method == "POST" && len(q) == 0:
-			return "Invoke", map[string]Value{"FunctionName": {Kind: ValueString, String: parts[2]}}, nil
-		case len(parts) == 4 && parts[0] == "2015-03-31" && parts[1] == "functions" && parts[3] == "configuration" && method == "PUT" && len(q) == 0:
-			return "UpdateFunctionConfiguration", map[string]Value{"FunctionName": {Kind: ValueString, String: parts[2]}}, nil
-		}
-	case "s3":
-		if len(parts) == 1 {
-			if method == "GET" && restQueryIs(q, map[string]string{"list-type": "2"}) {
-				return "ListObjectsV2", map[string]Value{"Bucket": {Kind: ValueString, String: parts[0]}}, nil
+	matches := 0
+	var operation string
+	var params map[string]Value
+	if c != nil {
+		for _, s := range c.Services() {
+			if s.EndpointPrefix != service {
+				continue
 			}
-			if method == "GET" && restQueryIs(q, map[string]string{"location": ""}) {
-				return "GetBucketLocation", map[string]Value{"Bucket": {Kind: ValueString, String: parts[0]}}, nil
+			wire, ok := catalogProtocol(s.Protocol, "")
+			if !ok || wire != protocol {
+				continue
 			}
-			return "", nil, errors.New("ambiguous or unsupported S3 bucket operation")
-		}
-		if len(parts) >= 2 {
-			key := strings.Join(parts[1:], "/")
-			var op string
-			switch method {
-			case "GET":
-				op = "GetObject"
-			case "PUT":
-				op = "PutObject"
-			case "DELETE":
-				op = "DeleteObject"
-			default:
-				return "", nil, errors.New("unsupported S3 object method")
+			for _, o := range s.Operations {
+				if o.Service != service || o.Route.Method != method {
+					continue
+				}
+				candidate, ok, err := matchRESTURI(o.Route.URI, path, q, l)
+				if err != nil {
+					return "", nil, err
+				}
+				if !ok {
+					continue
+				}
+				matches++
+				if o.State != iamlivecatalog.EvidenceKnown {
+					return "", nil, errors.New("REST operation is contradictory or unsupported")
+				}
+				operation, params = o.Name, candidate
 			}
-			if len(q) != 0 && !restQueryIs(q, map[string]string{"x-id": op}) {
-				return "", nil, errors.New("unsupported S3 object subresource")
-			}
-			return op, map[string]Value{"Bucket": {Kind: ValueString, String: parts[0]}, "Key": {Kind: ValueString, String: key}}, nil
 		}
 	}
-	return "", nil, errors.New("unknown REST-JSON operation")
+	if matches == 0 {
+		return "", nil, errors.New("unknown REST operation")
+	}
+	if matches != 1 {
+		return "", nil, errors.New("ambiguous REST operation")
+	}
+	return operation, params, nil
+}
+
+// matchRESTURI preserves escaped path boundaries: an escaped slash remains in
+// one parameter segment and is never allowed to satisfy an individual segment.
+func matchRESTURI(uri, requestPath string, q url.Values, l DecodeLimits) (map[string]Value, bool, error) {
+	templatePath, templateQuery, _ := strings.Cut(uri, "?")
+	templateTrailing := templatePath != "/" && strings.HasSuffix(templatePath, "/")
+	requestTrailing := requestPath != "/" && strings.HasSuffix(requestPath, "/")
+	if templateTrailing != requestTrailing {
+		return nil, false, nil
+	}
+	templateParts, ok := restPathParts(templatePath)
+	if !ok {
+		return nil, false, errors.New("REST catalog route is malformed")
+	}
+	requestParts, ok := restPathParts(requestPath)
+	if !ok {
+		return nil, false, errors.New("REST path is malformed")
+	}
+	params := map[string]Value{}
+	i := 0
+	for j, part := range templateParts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			name := strings.TrimSuffix(strings.TrimPrefix(part, "{"), "}")
+			greedy := strings.HasSuffix(name, "+")
+			if greedy {
+				name = strings.TrimSuffix(name, "+")
+			}
+			if !validOperation(name) || (greedy && j != len(templateParts)-1) {
+				return nil, false, errors.New("REST catalog route is malformed")
+			}
+			count := 1
+			if greedy {
+				count = len(requestParts) - i
+			}
+			if count < 1 || i+count > len(requestParts) {
+				return nil, false, nil
+			}
+			values := make([]string, count)
+			for n := 0; n < count; n++ {
+				decoded, err := url.PathUnescape(requestParts[i+n])
+				if err != nil || !validPathValue(decoded, l) {
+					return nil, false, errors.New("REST path parameter is malformed")
+				}
+				values[n] = decoded
+			}
+			params[name] = Value{Kind: ValueString, String: strings.Join(values, "/")}
+			i += count
+			continue
+		}
+		if i >= len(requestParts) || requestParts[i] != part {
+			return nil, false, nil
+		}
+		i++
+	}
+	if i != len(requestParts) {
+		return nil, false, nil
+	}
+	want := url.Values{}
+	if templateQuery != "" {
+		for _, field := range strings.Split(templateQuery, "&") {
+			parts := strings.SplitN(field, "=", 2)
+			key, err := url.QueryUnescape(parts[0])
+			if err != nil || key == "" {
+				return nil, false, errors.New("REST catalog query is malformed")
+			}
+			value := ""
+			if len(parts) == 2 {
+				value, err = url.QueryUnescape(parts[1])
+				if err != nil {
+					return nil, false, errors.New("REST catalog query is malformed")
+				}
+			}
+			if _, exists := want[key]; exists {
+				return nil, false, errors.New("REST catalog query is ambiguous")
+			}
+			want[key] = []string{value}
+		}
+	}
+	if !reflect.DeepEqual(want, q) {
+		return nil, false, nil
+	}
+	return params, true, nil
+}
+
+func restPathParts(path string) ([]string, bool) {
+	if path == "/" {
+		return nil, true
+	}
+	if !strings.HasPrefix(path, "/") {
+		return nil, false
+	}
+	path = strings.TrimSuffix(path, "/")
+	if path == "" {
+		return nil, false
+	}
+	parts := strings.Split(path[1:], "/")
+	for _, part := range parts {
+		if part == "" {
+			return nil, false
+		}
+	}
+	return parts, true
 }
 
 func validateRESTQuery(q url.Values, l DecodeLimits) error {
@@ -111,21 +219,6 @@ func validateRESTQuery(q url.Values, l DecodeLimits) error {
 		}
 	}
 	return nil
-}
-
-func restQueryIs(q url.Values, allowed ...map[string]string) bool {
-	if len(q) != len(allowed) {
-		return false
-	}
-	for _, pair := range allowed {
-		for key, want := range pair {
-			values, ok := q[key]
-			if !ok || len(values) != 1 || values[0] != want {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func validPathValue(v string, l DecodeLimits) bool {

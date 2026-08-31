@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
 type trackedBody struct {
@@ -45,8 +47,41 @@ func stsRequest(body io.ReadCloser) (*http.Request, *VerifiedRequest) {
 	r.Body = body
 	r.ContentLength = -1
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.URL.RawQuery = "Action=GetCallerIdentity"
+	r.URL.RawQuery = "Action=GetCallerIdentity&Version=2011-06-15"
 	return r, &VerifiedRequest{Request: r, Endpoint: e, Protocol: ProtocolQuery, SigningScheme: SigningHeaderV4, SigningRegion: e.Region, SigningService: e.Service, PayloadMode: PayloadHashSHA256}
+}
+
+type testWireCatalog struct{ services []iamlivecatalog.Service }
+
+func (c testWireCatalog) Services() []iamlivecatalog.Service { return c.services }
+
+func jsonTestCatalog(state iamlivecatalog.EvidenceState, ownTarget string) testWireCatalog {
+	return testWireCatalog{services: []iamlivecatalog.Service{{
+		EndpointPrefix: "dynamodb", Protocol: "json", TargetPrefix: "DynamoDB_20120810",
+		Operations: []iamlivecatalog.Operation{{Service: "dynamodb", Name: "GetItem", State: state, Route: iamlivecatalog.Route{TargetPrefix: ownTarget, JSONVersion: "1.0"}}},
+	}}}
+}
+
+func TestJSONCatalogRequiresExactKnownOwnTarget(t *testing.T) {
+	for name, cat := range map[string]testWireCatalog{
+		"contradictory operation": jsonTestCatalog(iamlivecatalog.EvidenceContradictory, "DynamoDB_20120810"),
+		"empty own target":        jsonTestCatalog(iamlivecatalog.EvidenceKnown, ""),
+		"mismatched own target":   jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20111205"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, cat, 4096); err == nil {
+				t.Fatal("contradictory or non-exact operation evidence was accepted")
+			}
+		})
+	}
+	if got, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20120810"), 4096); err != nil || got != "GetItem" {
+		t.Fatalf("exact operation evidence rejected: %q %v", got, err)
+	}
+	duplicate := jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20120810")
+	duplicate.services[0].Operations = append(duplicate.services[0].Operations, duplicate.services[0].Operations[0])
+	if _, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, duplicate, 4096); err == nil {
+		t.Fatal("duplicate raw operation evidence was accepted")
+	}
 }
 
 func TestDecoderProtocolAuthorityRejectsCrossProtocolSpoofs(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
 func parseQueryString(raw string, l DecodeLimits) (url.Values, error) {
@@ -46,7 +48,7 @@ func parseQueryString(raw string, l DecodeLimits) (url.Values, error) {
 	}
 	return v, nil
 }
-func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProtocol, l DecodeLimits) (string, map[string]Value, url.Values, error) {
+func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProtocol, c wireCatalog, l DecodeLimits) (string, map[string]Value, url.Values, error) {
 	b, e := parseQueryString(string(body), l)
 	if e != nil {
 		return "", nil, nil, e
@@ -62,11 +64,15 @@ func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProt
 		all[k] = x
 	}
 	a := all.Get("Action")
+	version := all.Get("Version")
 	if a == "" || !validOperation(a) {
 		return "", nil, nil, errors.New("query Action is missing or malformed")
 	}
-	if !operationKnown(service, a) {
-		return "", nil, nil, errors.New("query Action is unknown for endpoint service")
+	if version == "" {
+		return "", nil, nil, errors.New("query Version is missing")
+	}
+	if !catalogQueryOperation(c, service, version, protocol, a) {
+		return "", nil, nil, errors.New("query Action is absent, contradictory, or ambiguous")
 	}
 	if protocol == ProtocolQuery && service == "ec2" {
 		return "", nil, nil, errors.New("EC2 must use ec2-query protocol")
@@ -108,4 +114,33 @@ func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProt
 		params["InstanceIds"] = Value{Kind: ValueArray, Array: a}
 	}
 	return a, params, all, nil
+}
+
+// catalogQueryOperation walks the service records rather than the catalog's
+// normalized operation index. This keeps API-version, protocol, service, and
+// operation identity checks independent and makes duplicate raw evidence fail
+// closed.
+func catalogQueryOperation(c wireCatalog, service, version string, protocol AWSProtocol, action string) bool {
+	if c == nil || service == "" || version == "" || action == "" {
+		return false
+	}
+	matches := 0
+	for _, s := range c.Services() {
+		if s.EndpointPrefix != service || s.APIVersion != version {
+			continue
+		}
+		wire, ok := catalogProtocol(s.Protocol, "")
+		if !ok || wire != protocol {
+			continue
+		}
+		for _, o := range s.Operations {
+			if o.Service == service && o.Name == action {
+				matches++
+				if o.State != iamlivecatalog.EvidenceKnown {
+					return false
+				}
+			}
+		}
+	}
+	return matches == 1
 }
