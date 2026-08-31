@@ -12,8 +12,6 @@
 *.crt
 .DS_Store
 
-# Local planning notes
-docs/future-improvements.md
 
 # Editors
 .idea/

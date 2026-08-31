@@ -8,7 +8,7 @@ The implementation keeps Kordn's existing security boundary: endpoint classifica
 
 ## Source Spec
 
-- Spec: `docs/future-improvements.md`, first item: **Remove the intentionally limited AWS operation matrix**
+- Spec: `docs/backlog.md`, first item: **Remove the intentionally limited AWS operation matrix**
 - Supporting contract: `docs/kordn-local-proxy-technical-spec.md`, Sections 11.2-11.7 and 15.2-15.3
 - Status: Assumed; the acceptance criteria are treated as normative
 - Last reviewed: 2026-08-30
@@ -63,7 +63,7 @@ The implementation keeps Kordn's existing security boundary: endpoint classifica
 - Supporting GovCloud, China, ISO partitions, custom endpoints, SigV4a, presigned requests, streaming signatures, or signed event streams.
 - Guaranteeing that every catalogued operation can be allowed immediately; unresolved mappings remain safe local denials.
 - Supporting a source build from a GitHub-generated archive or uninitialized clone. Source builders must clone/init the pinned submodule; published binaries remain standalone.
-- Implementing the later `future-improvements.md` items for startup diagnostics, allow-by-default policies, or agent policy-control skills.
+- Implementing the later `backlog.md` items for startup diagnostics, allow-by-default policies, or agent policy-control skills.
 - Adding runtime network metadata refresh, policy hot reload, or a remote authorization service.
 - Replacing Kordn's policy engine or weakening known-global wildcard acknowledgement.
 
@@ -284,7 +284,7 @@ Files:
 - Modify: `Makefile` — add `iamlive-init` and `iamlive-check`; make build/test/security/release gates fail clearly when the submodule is absent or incorrectly prepared.
 - Modify: `.github/workflows/ci.yml` — initialize the pinned sparse submodule before Go setup/gates while preserving concurrent workflow edits.
 - Modify: `third_party/iamlive/PROVENANCE.md`, `THIRD_PARTY_NOTICES.md`, `license-check`, and `docs/decisions/0001-iamlive-integration.md` — record the gitlink, selected paths, content hashes, MIT notices, and neutral-catalog/enforcement boundary.
-- Modify: `docs/architecture.md`, `docs/compatibility.md`, `docs/quickstart.md`, and `docs/future-improvements.md` — document clone/init requirements, catalog versus endpoint activation, fail-closed unresolved behavior, IAM XML denials, and completion of the first improvement.
+- Modify: `docs/architecture.md`, `docs/compatibility.md`, `docs/quickstart.md`, and `docs/backlog.md` — document clone/init requirements, catalog versus endpoint activation, fail-closed unresolved behavior, IAM XML denials, and completion of the first improvement.
 - Modify: `docs/security-review-checklist.md` if checklist invariants or acceptance IDs need catalog coverage without changing existing numbering silently.
 - Test: `internal/iamlivecatalog/catalog_test.go`, `internal/proxy/pipeline_behavior_test.go`, and `internal/iammap/mapper_test.go` — pin/content/version/cache and varied behavior-contract assertions.
 
