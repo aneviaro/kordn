@@ -104,13 +104,13 @@ Files:
 - Test: `internal/iamlivecatalog/catalog_test.go` and `internal/iammap/data/version_test.go` — pin, parse, completeness, uniqueness, immutability, and cross-file consistency coverage.
 
 Steps:
-- [ ] Add the exact iamlive gitlink and the simple idempotent init Bash script; fail if HEAD differs, a selected file is absent, or upstream `go.mod` remains in the sparse worktree.
-- [ ] Implement direct embedding plus bounded, duplicate-rejecting parsing of all selected API models and both IAM datasets; do not write a generated Kordn operation/action dataset.
-- [ ] Preserve all service aliases, authoritative protocols, target prefixes, operation names, HTTP methods/URI templates/query discriminators, zero/many IAM actions, resource templates, dependent actions, and extraction/applicability templates without manufacturing defaults.
-- [ ] Retain undocumented, permissionless, conditional, missing, and contradictory records as explicit states that cannot silently become permissions.
-- [ ] Exercise different catalog shapes with `iam/ListUsers` (known-global Query), `dynamodb/BatchExecuteStatement` (multiple actions), `cloudwatch/ListTagsForResource` (cross-service action), and `lambda/CreateFunction` (dependent permission).
-- [ ] Run the one-time migration Bash script to cross-check every `map.json` action against `iam_definition.json`, emit a coverage/disagreement report, and remove the legacy copied data/table files only when all current goldens are represented.
-- [ ] Delete `scripts/migrate-iamlive-catalog.sh` after its report has been captured in the ADR or task commit; keep only the small reusable submodule-init script and permanent Go consistency tests.
+- [x] Add the exact iamlive gitlink and the simple idempotent init Bash script; fail if HEAD differs, a selected file is absent, or upstream `go.mod` remains in the sparse worktree.
+- [x] Implement direct embedding plus bounded, duplicate-rejecting parsing of all selected API models and both IAM datasets; do not write a generated Kordn operation/action dataset.
+- [x] Preserve all service aliases, authoritative protocols, target prefixes, operation names, HTTP methods/URI templates/query discriminators, zero/many IAM actions, resource templates, dependent actions, and extraction/applicability templates without manufacturing defaults.
+- [x] Retain undocumented, permissionless, conditional, missing, and contradictory records as explicit states that cannot silently become permissions.
+- [x] Exercise different catalog shapes with `iam/ListUsers` (known-global Query), `dynamodb/BatchExecuteStatement` (multiple actions), `cloudwatch/ListTagsForResource` (cross-service action), and `lambda/CreateFunction` (dependent permission).
+- [x] Run the one-time migration Bash script to cross-check every `map.json` action against `iam_definition.json`, emit a coverage/disagreement report, and remove the legacy copied data/table files only when all current goldens are represented.
+- [x] Delete `scripts/migrate-iamlive-catalog.sh` after its report has been captured in the ADR or task commit; keep only the small reusable submodule-init script and permanent Go consistency tests.
 
 Verification:
 - `./scripts/init-iamlive-submodule.sh --check`

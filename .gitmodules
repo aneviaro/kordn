@@ -1,0 +1,3 @@
+[submodule "internal/iamlivecatalog/upstream"]
+	path = internal/iamlivecatalog/upstream
+	url = https://github.com/iann0036/iamlive.git
