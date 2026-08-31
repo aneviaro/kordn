@@ -1,22 +1,33 @@
 # iamlive provenance
 
-Kordn vendors the minimal derived operation/dependency mapper at
-`third_party/iamlive/source/mapper.go`. It is derived from the exact upstream
-revision `3ec1a40e560c2f00ec82c50223add810e2567efb` (MIT), upstream path
-`iamlivecore/logger.go`, symbols `getActions` (lines 485-506) and
-`getDependantActions` (lines 458-483). The corresponding Kordn file SHA256 is
-`89e3104adadac57a61366d4e1f6baf492f7b38a750254f6d46ffa481da437342`.
+Kordn embeds a neutral catalog derived from the exact iamlive revision
+`3ec1a40e560c2f00ec82c50223add810e2567efb` (`v1.1.28`, MIT; Copyright (c) 2021
+Ian Mckay). The source is registered as the gitlink
+`internal/iamlivecatalog/upstream` and is initialized by
+`scripts/init-iamlive-submodule.sh`.
 
-The derived `GetActions` contains an independent, explicit table for Kordn's
-reviewed supported-operation subset and has no explicit-action override. The
-derived `DependentActions` is invoked once for every mapped primary action,
-including actions with a proven-empty dependency result. For the narrowed ECS,
-EC2, and Lambda role-bearing subset it examines bounded typed request values and
-returns PassRole candidates with their concrete role values; uncertainty is
-reported rather than treated as empty. Kordn's adapter supplies these values
-and its mapper independently cross-checks primary actions against the pinned
-AWS SAR/model records and validates exact role ARNs and dependency applicability.
-This table narrowing, typed-value adaptation, and fail-closed cross-checking
-are Kordn-specific changes from the upstream runtime behavior.
+Only these upstream paths are selected and embedded:
 
-No upstream runtime, HTTP proxy, credential, or lifecycle code is copied.
+- `LICENSE` — SHA256 `d31581bd2e336f59a640f92f386786dea05c2d0930812fe0627b796e49cfc95f`
+- `NOTICE` — SHA256 `46898db400fce8eb0a0d43c70d5672582a42c766a5bed5c924a215d56ac11432`
+- `iamlivecore/map.json` — SHA256 `f6ab658506c1f21875cc8dd3c4a4ed2191c7eb4e6233c36678c841c3e2b330b4`
+- `iamlivecore/iam_definition.json` — SHA256 `2ec6e80322edd149eeff984bcbc67736b3d01f7b75e3abc8734a6a84847b855d`
+- `iamlivecore/apis/**/api-2.json` — each selected model is hashed into the
+  catalog source digest; the selected set is checked by the sparse-checkout
+  initializer.
+
+The catalog parser is neutral and offline: it preserves API routes, protocol and
+signature metadata, SDK aliases, operation/action mappings, plural mappings,
+resource templates, conditions, dependent actions, and missing, permissionless,
+undocumented, or contradictory evidence. It retains case-variant duplicate
+records and makes ambiguous records fail closed at lookup. The migration covers
+447 API models (19,543 operations), 19,514 SDK mapping keys, and 20,638 IAM
+definitions; the pinned files contain 225 missing and 2 contradictory mapping
+agreements, plus 3 explicit permissionless operations and 30 undocumented IAM
+definitions. Its digest is deterministic over the four core files, notices, and
+every selected API path and byte sequence.
+
+No iamlive runtime, proxy, credential, HTTP, or authorization enforcement code is
+copied. Kordn's authorization and fail-closed enforcement remain outside this
+upstream parsing boundary. The MIT license and upstream NOTICE apply only to the
+selected derived data boundary; Kordn code remains under the repository license.

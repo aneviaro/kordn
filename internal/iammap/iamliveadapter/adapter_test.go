@@ -20,6 +20,23 @@ func TestLookupUsesPinnedActionsAndInvokesDependencies(t *testing.T) {
 	}
 }
 
+func TestLookupFailsClosedForAbsentAndContradictoryMappingEvidence(t *testing.T) {
+	a, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		service, operation string
+	}{
+		{"cloudsearchdomain", "UploadDocuments"},
+		{"verifiedpermissions", "IsAuthorized"},
+	} {
+		if _, err := a.Lookup(tc.service, tc.operation); err == nil {
+			t.Fatalf("Lookup(%q, %q) accepted invalid mapping evidence", tc.service, tc.operation)
+		}
+	}
+}
+
 func TestDependentActionsModelsPassRoleFromTypedParameters(t *testing.T) {
 	a, err := New()
 	if err != nil {
