@@ -156,7 +156,17 @@ func TestCatalogCopiesAreImmutableToCallers(t *testing.T) {
 		t.Fatal("service slices alias catalog storage")
 	}
 
-	o, err := c.Operation("lambda", "CreateFunction")
+	o, err := c.Operation("s3", "GetObject")
+	if err != nil || len(o.QueryBindings) == 0 {
+		t.Fatalf("S3 query bindings unavailable: %v", err)
+	}
+	o.QueryBindings[0].LocationName = "mutated"
+	freshS3, err := c.Operation("s3", "GetObject")
+	if err != nil || freshS3.QueryBindings[0].LocationName == "mutated" {
+		t.Fatal("query binding slice aliases catalog storage")
+	}
+
+	o, err = c.Operation("lambda", "CreateFunction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +195,55 @@ func TestCatalogCopiesAreImmutableToCallers(t *testing.T) {
 		if a.Name == "mutated" {
 			t.Fatal("action slice aliases catalog storage")
 		}
+	}
+}
+
+func TestAPIDecodeRejectsMalformedEvidenceWithContext(t *testing.T) {
+	base := func(shape string) string {
+		return `{"metadata":{},"operations":{"Op":{"input":{"shape":"Input"}}},"shapes":{"Input":` + shape + `,"S":{"type":"string"}}}`
+	}
+	cases := []struct {
+		name, shape, want string
+	}{
+		{"duplicate member key", `{"type":"structure","members":{"X":{"shape":"S"},"X":{"shape":"S"}}}`, "shapes.Input.members"},
+		{"duplicate required", `{"type":"structure","required":["X","X"],"members":{"X":{"shape":"S"}}}`, "duplicate required"},
+		{"absent required member", `{"type":"structure","required":["Missing"],"members":{"X":{"shape":"S"}}}`, "absent required"},
+		{"empty required member", `{"type":"structure","required":[""],"members":{}}`, "empty required"},
+		{"empty query location", `{"type":"structure","members":{"X":{"shape":"S","location":"querystring","locationName":""}}}`, "empty query locationName"},
+		{"duplicate query location", `{"type":"structure","members":{"X":{"shape":"S","location":"querystring","locationName":"q"},"Y":{"shape":"S","location":"querystring","locationName":"q"}}}`, "duplicate query locationName"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeAPI("malformed/api-2.json", []byte(base(tc.shape)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error lacks contextual evidence: %v", err)
+			}
+			if tc.name != "duplicate member key" && (!strings.Contains(err.Error(), `operation "Op"`) || !strings.Contains(err.Error(), `input shape "Input"`)) {
+				t.Fatalf("error lacks operation/shape context: %v", err)
+			}
+		})
+	}
+}
+
+func TestStrictAPIDecodeRejectsTrailingJSON(t *testing.T) {
+	_, err := decodeAPI("trailing/api-2.json", []byte(`{"metadata":{},"operations":{},"shapes":{}} {}`))
+	if err == nil || !strings.Contains(err.Error(), "trailing/api-2.json") || !strings.Contains(err.Error(), "trailing JSON") {
+		t.Fatalf("trailing API JSON was accepted without context: %v", err)
+	}
+}
+
+func TestModeledRESTQueryBindingsDisambiguateS3(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	get, err := c.Operation("s3", "GetObject")
+	if err != nil || len(get.QueryBindings) == 0 {
+		t.Fatalf("GetObject query bindings missing: %+v %v", get.QueryBindings, err)
+	}
+	list, err := c.Operation("s3", "ListParts")
+	if err != nil || len(list.QueryBindings) == 0 {
+		t.Fatalf("ListParts query bindings missing: %+v %v", list.QueryBindings, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package iamlivecatalog
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,9 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -199,12 +202,9 @@ func parse() (*Catalog, error) {
 		h.Write([]byte(file))
 		h.Write([]byte{0})
 		h.Write(b)
-		if e = validJSON(b, file); e != nil {
+		a, e := decodeAPI(file, b)
+		if e != nil {
 			return nil, e
-		}
-		var a rawAPI
-		if e = json.Unmarshal(b, &a); e != nil {
-			return nil, fmt.Errorf("%s: %w", file, e)
 		}
 		if e = cat.addAPI(file, a); e != nil {
 			return nil, e
@@ -326,7 +326,110 @@ func parse() (*Catalog, error) {
 type rawAPI struct {
 	Metadata   rawMetadata             `json:"metadata"`
 	Operations map[string]rawOperation `json:"operations"`
+	Shapes     map[string]rawShape     `json:"shapes"`
 }
+type rawShape struct {
+	Type     string               `json:"type"`
+	Required []string             `json:"required"`
+	Members  map[string]rawMember `json:"members"`
+}
+type rawMember struct {
+	Shape        string  `json:"shape"`
+	Location     string  `json:"location"`
+	LocationName *string `json:"locationName"`
+}
+
+// decodeAPI is the production API-model construction boundary. Strict JSON
+// validation must happen before unmarshalling because encoding/json otherwise
+// silently overwrites duplicate object members in maps.
+func decodeAPI(file string, b []byte) (rawAPI, error) {
+	if err := validJSON(b, file); err != nil {
+		return rawAPI{}, err
+	}
+	var a rawAPI
+	if err := json.Unmarshal(b, &a); err != nil {
+		return rawAPI{}, fmt.Errorf("%s: %w", file, err)
+	}
+	if err := validateAPI(file, a); err != nil {
+		return rawAPI{}, err
+	}
+	return a, nil
+}
+
+func validateAPI(file string, a rawAPI) error {
+	for operation, raw := range a.Operations {
+		shapeName := raw.Input.Shape
+		if shapeName == "" {
+			continue
+		}
+		shape, ok := a.Shapes[shapeName]
+		if !ok || shape.Type != "structure" {
+			return fmt.Errorf("%s: operation %q input shape %q is missing or malformed", file, operation, shapeName)
+		}
+		required := map[string]bool{}
+		for _, member := range shape.Required {
+			if member == "" {
+				return fmt.Errorf("%s: operation %q input shape %q has empty required member", file, operation, shapeName)
+			}
+			if required[member] {
+				return fmt.Errorf("%s: operation %q input shape %q has duplicate required member %q", file, operation, shapeName, member)
+			}
+			if _, ok := shape.Members[member]; !ok {
+				return fmt.Errorf("%s: operation %q input shape %q has absent required member %q", file, operation, shapeName, member)
+			}
+			required[member] = true
+		}
+		queryNames := map[string]string{}
+		for memberName, member := range shape.Members {
+			if memberName == "" || member.Shape == "" || a.Shapes[member.Shape].Type == "" {
+				return fmt.Errorf("%s: operation %q input shape %q has malformed member %q", file, operation, shapeName, memberName)
+			}
+			if member.Location != "querystring" {
+				continue
+			}
+			if member.LocationName != nil && strings.TrimSpace(*member.LocationName) == "" {
+				return fmt.Errorf("%s: operation %q input shape %q member %q has empty query locationName", file, operation, shapeName, memberName)
+			}
+			locationName := memberName
+			if member.LocationName != nil {
+				locationName = *member.LocationName
+			}
+			if prior, ok := queryNames[locationName]; ok {
+				return fmt.Errorf("%s: operation %q input shape %q has duplicate query locationName %q for members %q and %q", file, operation, shapeName, locationName, prior, memberName)
+			}
+			queryNames[locationName] = memberName
+		}
+	}
+	return nil
+}
+
+func queryBindings(a rawAPI, operation, file string, shapeName string) ([]QueryBinding, error) {
+	if shapeName == "" {
+		return nil, nil
+	}
+	shape, ok := a.Shapes[shapeName]
+	if !ok {
+		return nil, fmt.Errorf("%s: operation %q input shape %q is missing", file, operation, shapeName)
+	}
+	required := map[string]bool{}
+	for _, member := range shape.Required {
+		required[member] = true
+	}
+	var out []QueryBinding
+	for memberName, member := range shape.Members {
+		if member.Location != "querystring" {
+			continue
+		}
+		locationName := memberName
+		if member.LocationName != nil {
+			locationName = *member.LocationName
+		}
+		out = append(out, QueryBinding{Member: memberName, LocationName: locationName, Required: required[memberName]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LocationName < out[j].LocationName })
+	return out, nil
+}
+
 type rawMetadata struct {
 	APIVersion, EndpointPrefix, Protocol, ServiceFullName, ServiceID, SigningName, TargetPrefix, UID, JSONVersion string
 	Protocols                                                                                                     []string `json:"protocols"`
@@ -408,6 +511,10 @@ func (c *Catalog) addAPI(file string, a rawAPI) error {
 			// and its nested name. Keep the key for lookup and expose the issue.
 			state = EvidenceContradictory
 		}
+		bindings, err := queryBindings(a, n, file, o.Input.Shape)
+		if err != nil {
+			return err
+		}
 		discriminator := o.HTTP.RequestURI
 		switch strings.ToLower(m.Protocol) {
 		case "query":
@@ -415,7 +522,7 @@ func (c *Catalog) addAPI(file string, a rawAPI) error {
 		case "json":
 			discriminator = m.TargetPrefix + "." + n
 		}
-		s.Operations = append(s.Operations, Operation{Service: m.EndpointPrefix, Name: n, State: state, InputShape: o.Input.Shape, OutputShape: o.Output.Shape, Route: Route{Method: o.HTTP.Method, URI: o.HTTP.RequestURI, ResponseCode: o.HTTP.ResponseCode, QueryDiscriminator: discriminator, TargetPrefix: m.TargetPrefix, JSONVersion: m.JSONVersion}})
+		s.Operations = append(s.Operations, Operation{Service: m.EndpointPrefix, Name: n, State: state, InputShape: o.Input.Shape, OutputShape: o.Output.Shape, QueryBindings: bindings, Route: Route{Method: o.HTTP.Method, URI: o.HTTP.RequestURI, ResponseCode: o.HTTP.ResponseCode, QueryDiscriminator: discriminator, TargetPrefix: m.TargetPrefix, JSONVersion: m.JSONVersion}})
 	}
 	sort.Slice(s.Operations, func(i, j int) bool { return s.Operations[i].Name < s.Operations[j].Name })
 	idx := len(c.services)
@@ -460,7 +567,8 @@ func (c *Catalog) addAPI(file string, a rawAPI) error {
 
 func operationEquivalent(a, b Operation) bool {
 	return a.Service == b.Service && strings.EqualFold(a.Name, b.Name) &&
-		a.InputShape == b.InputShape && a.OutputShape == b.OutputShape && a.Route == b.Route
+		a.InputShape == b.InputShape && a.OutputShape == b.OutputShape && a.Route == b.Route &&
+		reflect.DeepEqual(a.QueryBindings, b.QueryBindings)
 }
 func (c *Catalog) replaceOperation(o Operation) {
 	// Update only the service and alias buckets that can contain this record.
@@ -575,12 +683,16 @@ func readEmbedded(name string) ([]byte, error) {
 	return b, nil
 }
 func validJSON(b []byte, name string) error {
-	var x interface{}
-	d := json.NewDecoder(strings.NewReader(string(b)))
-	if err := d.Decode(&x); err != nil {
+	if len(b) > maxJSONBytes {
+		return fmt.Errorf("%s exceeds parser bound", name)
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	state := jsonValidationState{maxDepth: 256}
+	if err := state.value(d, "$", 0); err != nil {
 		return fmt.Errorf("%s: invalid JSON: %w", name, err)
 	}
-	var extra interface{}
+	var extra json.Token
 	if err := d.Decode(&extra); err != io.EOF {
 		if err == nil {
 			return fmt.Errorf("%s: trailing JSON", name)
@@ -588,4 +700,75 @@ func validJSON(b []byte, name string) error {
 		return fmt.Errorf("%s: invalid trailing JSON: %w", name, err)
 	}
 	return nil
+}
+
+type jsonValidationState struct {
+	tokens   int
+	maxDepth int
+}
+
+// value validates JSON without materializing it. In particular, object keys
+// are checked before any map unmarshal can overwrite an earlier key.
+func (s *jsonValidationState) value(d *json.Decoder, jsonPath string, depth int) error {
+	s.tokens++
+	if s.tokens > maxJSONBytes || depth > s.maxDepth {
+		return errors.New("JSON validation limit exceeded")
+	}
+	t, err := d.Token()
+	if err != nil {
+		return err
+	}
+	switch token := t.(type) {
+	case json.Delim:
+		switch token {
+		case '{':
+			seen := map[string]bool{}
+			for d.More() {
+				keyToken, err := d.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return errors.New("object key is not a string")
+				}
+				if seen[key] {
+					return fmt.Errorf("duplicate object key %q at %s", key, jsonPath)
+				}
+				seen[key] = true
+				if err := s.value(d, jsonPath+"."+jsonPathName(key), depth+1); err != nil {
+					return err
+				}
+			}
+			end, err := d.Token()
+			if err != nil || end != json.Delim('}') {
+				return errors.New("malformed JSON object")
+			}
+		case '[':
+			for i := 0; d.More(); i++ {
+				if err := s.value(d, fmt.Sprintf("%s[%d]", jsonPath, i), depth+1); err != nil {
+					return err
+				}
+			}
+			end, err := d.Token()
+			if err != nil || end != json.Delim(']') {
+				return errors.New("malformed JSON array")
+			}
+		default:
+			return errors.New("unexpected JSON delimiter")
+		}
+	}
+	return nil
+}
+
+func jsonPathName(key string) string {
+	if key == "" {
+		return `""`
+	}
+	for _, r := range key {
+		if r != '_' && r != '-' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return "[" + strconv.Quote(key) + "]"
+		}
+	}
+	return key
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -60,6 +61,23 @@ func jsonTestCatalog(state iamlivecatalog.EvidenceState, ownTarget string) testW
 		EndpointPrefix: "dynamodb", Protocol: "json", TargetPrefix: "DynamoDB_20120810",
 		Operations: []iamlivecatalog.Operation{{Service: "dynamodb", Name: "GetItem", State: state, Route: iamlivecatalog.Route{TargetPrefix: ownTarget, JSONVersion: "1.0"}}},
 	}}}
+}
+
+func TestModeledRESTDisambiguatesS3AndKeepsLogsCreateDelivery(t *testing.T) {
+	c, err := iamlivecatalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := restOperationFromCatalog("s3", "/bucket/object", "GET", nil, ProtocolRESTXML, c, DefaultDecodeLimits()); err != nil || got != "GetObject" {
+		t.Fatalf("S3 GetObject route mismatch: %q %v", got, err)
+	}
+	q := url.Values{"uploadId": {"upload"}}
+	if got, _, err := restOperationFromCatalog("s3", "/bucket/object", "GET", q, ProtocolRESTXML, c, DefaultDecodeLimits()); err != nil || got != "ListParts" {
+		t.Fatalf("S3 ListParts route mismatch: %q %v", got, err)
+	}
+	if got, err := targetOperationFor("Logs_20140328.CreateDelivery", "logs", ProtocolJSON11, c, 4096); err != nil || got != "CreateDelivery" {
+		t.Fatalf("Logs CreateDelivery target mismatch: %q %v", got, err)
+	}
 }
 
 func TestJSONCatalogRequiresExactKnownOwnTarget(t *testing.T) {

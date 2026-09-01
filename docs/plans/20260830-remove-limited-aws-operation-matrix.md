@@ -159,6 +159,20 @@ Completion criteria:
 - No decoder source file contains a hand-authored per-operation allowlist.
 - Unknown, malformed, conflicting, or ambiguous operation evidence still fails closed.
 
+### Prerequisite to Task 3: Preserve modeled REST query discriminators
+
+Goal: Complete the Task 2 REST identity boundary before mapper work by preserving input-shape query bindings from the pinned API models.
+
+Steps:
+- [x] Parse deterministic allowed and required REST query bindings from each operation input shape, defensively copy them, and reject malformed, duplicate, or contradictory raw JSON evidence.
+- [x] Match REST requests only when every query key is modeled or literal, every required key is present exactly once, and literal selectors match exactly; retain zero/multiple-match fail-closed behavior.
+- [x] Prove S3 `GetObject` and `ListParts` are distinguished by modeled `uploadId` evidence, unknown query keys reject, and CloudWatch Logs `CreateDelivery` retains JSON 1.1 target identity.
+
+Verification:
+- `go test -race ./internal/iamlivecatalog ./internal/awsrequest`
+- `go test ./internal/awsrequest -run 'Test.*(GetObject|ListParts|CreateDelivery|REST.*Query|Protocol)' -count=1`
+- `go test ./internal/awsrequest -run '^$' -fuzz FuzzAWSRequestConfiguredDecoder -fuzztime=2s`
+
 ### Task 3: Map complete IAM requirements through the guarded adapter
 
 Goal: Make the mapper consume complete submodule-backed action/resource/dependency records across varied operation shapes without treating missing extraction evidence as a wildcard.
