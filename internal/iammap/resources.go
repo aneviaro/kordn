@@ -3,13 +3,16 @@ package iammap
 import (
 	"errors"
 	"fmt"
-	"github.com/kordn-ai/kordn/internal/awsrequest"
 	"net/url"
+	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/kordn-ai/kordn/internal/awsrequest"
 )
 
-func resourceFor(req *awsrequest.DecodedAWSRequest, kind string) ([]string, awsrequest.ScopeKind, error) {
+func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]string, awsrequest.ScopeKind, error) {
+	kind = strings.TrimSuffix(kind, "*")
 	if kind == "global" {
 		return []string{"*"}, awsrequest.ScopeKnownGlobal, nil
 	}
@@ -117,6 +120,9 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind string) ([]string, awsr
 		}
 		return []string{a}, awsrequest.ScopeExact, nil
 	case "table":
+		if req.Service == "dynamodb" && req.Operation == "BatchExecuteStatement" {
+			return dynamoStatementARNs(req, action)
+		}
 		return namedARN(req, "dynamodb", "TableName", "table/")
 	case "dataset":
 		name := parameterString(req.Parameters, "DatasetId", "Namespace")
@@ -177,6 +183,114 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind string) ([]string, awsr
 		return nil, awsrequest.ScopeUnresolved, fmt.Errorf("unknown resource type %q", kind)
 	}
 }
+
+// BatchExecuteStatement carries several PartiQL statements. Each applicable
+// statement contributes its table ARN to the corresponding PartiQL action.
+func dynamoStatementARNs(req *awsrequest.DecodedAWSRequest, action string) ([]string, awsrequest.ScopeKind, error) {
+	var statements []awsrequest.Value
+	for key, value := range req.Parameters {
+		if strings.EqualFold(key, "Statements") {
+			if value.Kind != awsrequest.ValueArray {
+				return nil, awsrequest.ScopeUnresolved, nil
+			}
+			statements = value.Array
+			break
+		}
+	}
+	if len(statements) == 0 || req.CallerAccountID == "" || req.Region == "" {
+		return nil, awsrequest.ScopeUnresolved, nil
+	}
+	want := strings.ToLower(action)
+	seen := map[string]bool{}
+	var resources []string
+	for _, item := range statements {
+		if item.Kind != awsrequest.ValueObject {
+			return nil, awsrequest.ScopeUnresolved, nil
+		}
+		statement := parameterString(item.Object, "Statement")
+		if statement == "" {
+			return nil, awsrequest.ScopeUnresolved, nil
+		}
+		table, kind, ok := parseDynamoStatement(statement)
+		if !ok {
+			return nil, awsrequest.ScopeUnresolved, nil
+		}
+		if strings.ToLower("dynamodb:PartiQL"+kind) != want {
+			continue
+		}
+		if !validDynamoTableName(table) {
+			return nil, awsrequest.ScopeUnresolved, errors.New("invalid DynamoDB table name")
+		}
+		arn := awsARN(req.Partition, "dynamodb", req.Region, req.CallerAccountID, "table/"+table)
+		if arn == "" {
+			return nil, awsrequest.ScopeUnresolved, errors.New("invalid DynamoDB table ARN")
+		}
+		if !seen[arn] {
+			seen[arn] = true
+			resources = append(resources, arn)
+		}
+	}
+	if len(resources) == 0 {
+		return nil, awsrequest.ScopeUnresolved, nil
+	}
+	sort.Strings(resources)
+	if len(resources) == 1 {
+		return resources, awsrequest.ScopeExact, nil
+	}
+	return resources, awsrequest.ScopeSet, nil
+}
+
+func parseDynamoStatement(statement string) (string, string, bool) {
+	fields := strings.Fields(statement)
+	if len(fields) < 2 {
+		return "", "", false
+	}
+	kind := strings.ToUpper(fields[0])
+	index := 1
+	switch kind {
+	case "SELECT":
+		for index < len(fields) && strings.ToUpper(fields[index]) != "FROM" {
+			index++
+		}
+		if index >= len(fields) {
+			return "", "", false
+		}
+		index++
+	case "DELETE":
+		if index < len(fields) && strings.ToUpper(fields[index]) == "FROM" {
+			index++
+		}
+	case "INSERT":
+		if index >= len(fields) || strings.ToUpper(fields[index]) != "INTO" {
+			return "", "", false
+		}
+		index++
+	case "UPDATE":
+	default:
+		return "", "", false
+	}
+	if index >= len(fields) {
+		return "", "", false
+	}
+	table := strings.Trim(fields[index], "\\\"'`,;")
+	if table == "" || strings.ContainsAny(table, "\\\"'`") {
+		return "", "", false
+	}
+	name := map[string]string{"SELECT": "Select", "DELETE": "Delete", "INSERT": "Insert", "UPDATE": "Update"}[kind]
+	return table, name, true
+}
+func validDynamoTableName(name string) bool {
+	if name == "" || len(name) > 255 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 func namedARN(req *awsrequest.DecodedAWSRequest, service, param, prefix string) ([]string, awsrequest.ScopeKind, error) {
 	if req.CallerAccountID == "" || req.Region == "" {
 		return nil, awsrequest.ScopeUnresolved, nil

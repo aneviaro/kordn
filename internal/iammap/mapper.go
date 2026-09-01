@@ -24,6 +24,9 @@ type mapperAdapter interface {
 	Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error)
 	Version() string
 }
+type wireLookupAdapter interface {
+	LookupRequest(string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error)
+}
 
 type Mapper struct {
 	timeout    time.Duration
@@ -126,50 +129,66 @@ func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) 
 	if op == "" {
 		return nil, errors.New("operation evidence is unknown")
 	}
-	lookup, e := m.adapter.Lookup(req.Service, op, req.Parameters)
+	wire, ok := m.adapter.(wireLookupAdapter)
+	if !ok {
+		return nil, errors.New("request-aware adapter is required")
+	}
+	identity := iamliveadapter.WireIdentity{Protocol: req.Protocol, Method: req.Method, Path: req.CanonicalPath, Query: req.CanonicalQuery}
+	if req.Protocol == awsrequest.ProtocolJSON10 || req.Protocol == awsrequest.ProtocolJSON11 {
+		if req.Headers == nil {
+			return nil, errors.New("exactly one X-Amz-Target is required")
+		}
+		targets := req.Headers.Values("X-Amz-Target")
+		if len(targets) != 1 {
+			return nil, errors.New("exactly one X-Amz-Target is required")
+		}
+		identity.Target = targets[0]
+	}
+	lookup, e := wire.LookupRequest(req.Service, op, identity, req.Parameters)
 	if e != nil {
-		return nil, fmt.Errorf("unknown operation %s:%s", req.Service, op)
+		return nil, fmt.Errorf("unknown operation %s:%s: %w", req.Service, op, e)
 	}
 	entry := lookup.Entry
-	if e := data.ValidateEntry(entry); e != nil {
-		return nil, fmt.Errorf("authorization metadata disagreement: %w", e)
-	}
 	canonical := entry.Operation
-	// The derived mapper is an independent source of operation/action
-	// evidence. A Kordn record is usable only when both sources agree exactly;
-	// an altered action can never be accepted merely because it matches the
-	// selected SAR record.
-	if len(lookup.Primary) != 1 {
+	if len(lookup.Primary) == 0 {
 		return nil, errors.New("iamlive primary action set disagrees")
 	}
-	rawAction := lookup.Primary[0].Service + ":" + lookup.Primary[0].Name
-	if rawAction != entry.Action {
-		return nil, errors.New("iamlive and authorization action disagree")
+	entries := lookup.PrimaryEntries
+	if len(entries) == 0 {
+		entries = []data.Entry{entry}
 	}
-	action := canonicalAction(rawAction)
-	if action == "" || action != canonicalAction(entry.Action) {
-		return nil, errors.New("iamlive and authorization action disagree")
+	if len(entries) != len(lookup.Primary) {
+		return nil, errors.New("iamlive primary action/record multiplicity disagrees")
 	}
-	if strings.SplitN(action, ":", 2)[0] != req.Service {
-		return nil, errors.New("authorization action service disagrees")
-	}
-	res, scope, e := resourceFor(req, entry.Resource)
-	if e != nil {
-		return nil, e
-	}
-	if scope == awsrequest.ScopeUnresolved {
-		return nil, errors.New("unresolved primary resource; mapping rejected")
-	}
-	if len(res) == 0 {
-		return nil, errors.New("primary resource is empty; mapping rejected")
-	}
-	if entry.Scope != "" && string(scope) != entry.Scope {
-		return nil, errors.New("primary scope evidence disagrees")
+	reqs := make([]awsrequest.IAMRequirement, 0, len(entries))
+	for i, primary := range lookup.Primary {
+		rawAction := primary.Service + ":" + primary.Name
+		action := canonicalAction(rawAction)
+		if action == "" {
+			return nil, errors.New("iamlive and authorization action disagree")
+		}
+		pe := entries[i]
+		if pe.Action != rawAction || pe.Service != entry.Service || pe.Operation != entry.Operation {
+			return nil, errors.New("iamlive primary record disagrees")
+		}
+		res, scope, e := resourceFor(req, pe.Resource, action)
+		if e != nil {
+			return nil, e
+		}
+		if scope == awsrequest.ScopeUnresolved {
+			return nil, errors.New("unresolved primary resource; mapping rejected")
+		}
+		if len(res) == 0 {
+			return nil, errors.New("primary resource is empty; mapping rejected")
+		}
+		if pe.Scope != "" && string(scope) != pe.Scope && !(pe.Scope == "exact" && scope == awsrequest.ScopeSet) {
+			return nil, errors.New("primary scope evidence disagrees")
+		}
+		reqs = append(reqs, awsrequest.IAMRequirement{Action: action, Resources: res, ScopeKind: scope})
 	}
 	if e := ctx.Err(); e != nil {
 		return nil, errors.New("mapper timeout; request rejected")
 	}
-	reqs := []awsrequest.IAMRequirement{{Action: action, Resources: res, ScopeKind: scope}}
 	deps, e := dependencies(req, entry, lookup.Dependencies, lookup.DependenciesCertain)
 	if e != nil {
 		return nil, e

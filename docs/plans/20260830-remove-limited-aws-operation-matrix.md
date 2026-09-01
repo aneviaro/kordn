@@ -190,16 +190,16 @@ Files:
 - Modify: `internal/iammap/dependencies.go` — validate catalogued dependency templates and concrete applicability/resources rather than allowing only `iam:PassRole` or a hand-authored operation switch.
 - Modify: `internal/awsrequest/types.go` — extend mapping evidence only if needed to report non-secret catalog-record/provenance identifiers; do not weaken `IAMRequirement.Validate`.
 - Test: `internal/iammap/golden_wire_test.go` — add representative known-global (`iam/ListUsers`), set (`ec2/TerminateInstances`), dependent (`lambda/CreateFunction`), and multi-action (`dynamodb/BatchExecuteStatement`) goldens.
-- Test: `internal/iammap/mapper_test.go`, `adapter_crosscheck_test.go`, and `account_context_test.go` — independent-source disagreement and fail-closed extraction coverage.
+- Test: `internal/iammap/mapper_test.go`, `adapter_crosscheck_test.go`, `account_context_test.go`, and `iamliveadapter/adapter_test.go` — independent-source disagreement, occurrence cardinality, and fail-closed extraction coverage.
 
 Steps:
-- [ ] Change adapter/data lookup contracts from one `Entry` to one complete operation record while keeping adapter maps immutable and defensive-copying all returned slices/maps.
-- [ ] Require exact agreement among decoded service/operation, API-model identity, `map.json` primary/dependent actions, and `iam_definition.json` resource records; reject missing, extra, or contradictory evidence.
-- [ ] Remove the one-primary-action and same-service-action restrictions; emit all independently verified requirements and sort them deterministically before validation/caching.
-- [ ] Map an action to `known_global` and `*` only when the embedded IAM definition authoritatively lists no resource types. For resource-capable actions, resolve exact/set resources through upstream templates plus Kordn ARN validators or return `unresolved` and reject.
-- [ ] Generalize dependency handling so every catalogued dependent action is conjunctive, conditionally applied only when concrete typed request evidence proves applicability, and rejected when applicability or resources are uncertain.
-- [ ] Preserve timeout/panic containment, endpoint reclassification, protocol revalidation, high-confidence-only results, and non-secret evidence.
-- [ ] Use different mapping examples from Tasks 1-2: S3 `GetObject` resolves an exact object ARN, EC2 `TerminateInstances` resolves an instance set, ECS `RunTask` retains `iam:PassRole`, and CloudWatch Logs `CreateDelivery` retains all mapped actions or fails closed if applicability cannot be proven.
+- [x] Change adapter/data lookup contracts from one `Entry` to one complete operation record while keeping adapter maps immutable and defensive-copying all returned slices/maps.
+- [x] Require exact agreement among decoded service/operation, API-model identity, `map.json` primary/dependent actions, and `iam_definition.json` resource records; reject missing, extra, or contradictory evidence.
+- [x] Remove the one-primary-action and same-service-action restrictions; emit all independently verified requirements and sort them deterministically before validation/caching.
+- [x] Map an action to `known_global` and `*` only when the embedded IAM definition authoritatively lists no resource types. For resource-capable actions, resolve exact/set resources through upstream templates plus Kordn ARN validators or return `unresolved` and reject.
+- [x] Generalize dependency handling so every catalogued dependent action is conjunctive, conditionally applied only when concrete typed request evidence proves applicability, and rejected when applicability or resources are uncertain.
+- [x] Preserve timeout/panic containment, endpoint reclassification, protocol revalidation, high-confidence-only results, and non-secret evidence.
+- [x] Use different mapping examples from Tasks 1-2: S3 `GetObject` resolves an exact object ARN, EC2 `TerminateInstances` resolves an instance set, ECS `RunTask` retains `iam:PassRole`, and CloudWatch Logs `CreateDelivery` retains all mapped actions or fails closed if applicability cannot be proven.
 
 Verification:
 - `go test -race ./internal/iammap ./internal/policy`

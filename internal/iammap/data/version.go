@@ -34,18 +34,30 @@ func Entries() ([]Entry, error) {
 		return nil, e
 	}
 	seen := map[string]bool{}
+	counts := map[string]int{}
+	for _, s := range c.Services() {
+		for _, o := range s.Operations {
+			counts[strings.ToLower(s.EndpointPrefix)+"\x00"+strings.ToLower(o.Name)]++
+		}
+	}
 	out := []Entry{}
 	for _, s := range c.Services() {
 		for _, o := range s.Operations {
-			if len(o.Mappings) == 0 {
+			if counts[strings.ToLower(s.EndpointPrefix)+"\x00"+strings.ToLower(o.Name)] != 1 || o.State != iamlivecatalog.EvidenceKnown || o.MappingState != iamlivecatalog.EvidenceKnown || len(o.Mappings) == 0 {
 				continue
 			}
 			m := o.Mappings[0]
+			if m.State != iamlivecatalog.EvidenceKnown {
+				continue
+			}
 			parts := strings.SplitN(m.Action, ":", 2)
 			if len(parts) != 2 {
 				continue
 			}
-			a, _ := c.Action(m.Action)
+			a, err := c.Action(m.Action)
+			if err != nil || a.State != iamlivecatalog.EvidenceKnown {
+				continue
+			}
 			resource := "global"
 			scope := "known_global"
 			var deps []string
@@ -63,7 +75,8 @@ func Entries() ([]Entry, error) {
 					scope = "unresolved"
 				}
 			}
-			x := Entry{Service: strings.ToLower(s.EndpointPrefix), Operation: o.Name, Action: m.Action, Resource: resource, Scope: scope, Dependencies: unique(deps)}
+			sort.Strings(deps)
+			x := Entry{Service: strings.ToLower(s.EndpointPrefix), Operation: o.Name, Action: m.Action, Resource: resource, Scope: scope, Dependencies: append([]string(nil), deps...)}
 			k := x.Service + "\x00" + x.Operation
 			if !seen[k] {
 				seen[k] = true
@@ -83,6 +96,20 @@ func Entries() ([]Entry, error) {
 	return out, nil
 }
 
+func operationRecordCount(c *iamlivecatalog.Catalog, service, operation string) int {
+	count := 0
+	for _, s := range c.Services() {
+		if strings.EqualFold(s.EndpointPrefix, service) {
+			for _, o := range s.Operations {
+				if strings.EqualFold(o.Name, operation) {
+					count++
+				}
+			}
+		}
+	}
+	return count
+}
+
 func ValidateEntry(e Entry) error {
 	if e.Service == "" || e.Operation == "" || e.Action == "" || e.Resource == "" {
 		return errors.New("incomplete catalog entry")
@@ -91,9 +118,15 @@ func ValidateEntry(e Entry) error {
 	if err != nil {
 		return err
 	}
+	if operationRecordCount(c, e.Service, e.Operation) != 1 {
+		return fmt.Errorf("ambiguous catalog operation: %s:%s", e.Service, e.Operation)
+	}
 	o, err := c.Operation(e.Service, e.Operation)
 	if err != nil {
 		return err
+	}
+	if o.State != iamlivecatalog.EvidenceKnown {
+		return fmt.Errorf("catalog operation evidence is %s: %s:%s", o.State, e.Service, e.Operation)
 	}
 	if o.MappingState != iamlivecatalog.EvidenceKnown {
 		return fmt.Errorf("catalog operation mapping evidence is %s: %s:%s", o.MappingState, e.Service, e.Operation)
@@ -132,15 +165,19 @@ func ValidateEntry(e Entry) error {
 			return fmt.Errorf("catalog resource missing: %s/%s", e.Action, e.Resource)
 		}
 	}
-	need := map[string]bool{}
+	var need []string
 	for _, r := range a.Resources {
-		for _, d := range r.DependentActions {
-			need[d] = true
-		}
+		need = append(need, r.DependentActions...)
 	}
-	for _, d := range e.Dependencies {
-		if !need[d] {
-			return fmt.Errorf("catalog dependency disagreement: %s", d)
+	have := append([]string(nil), e.Dependencies...)
+	sort.Strings(need)
+	sort.Strings(have)
+	if len(need) != len(have) {
+		return fmt.Errorf("catalog dependency disagreement")
+	}
+	for i := range need {
+		if need[i] != have[i] {
+			return fmt.Errorf("catalog dependency disagreement: %s", need[i])
 		}
 	}
 	return nil
@@ -184,17 +221,16 @@ func CheckNoWidening(base, candidate []Entry) error {
 		if c.Action != b.Action || c.Resource != b.Resource || c.Scope != b.Scope {
 			return fmt.Errorf("widening: metadata changed for %s", k)
 		}
-		need := map[string]bool{}
-		for _, d := range b.Dependencies {
-			need[d] = true
+		need := append([]string(nil), b.Dependencies...)
+		have := append([]string(nil), c.Dependencies...)
+		sort.Strings(need)
+		sort.Strings(have)
+		if len(need) != len(have) {
+			return fmt.Errorf("widening: dependency multiplicity changed for %s", k)
 		}
-		have := map[string]bool{}
-		for _, d := range c.Dependencies {
-			have[d] = true
-		}
-		for d := range need {
-			if !have[d] {
-				return fmt.Errorf("widening: dependency removed for %s", k)
+		for i := range need {
+			if need[i] != have[i] {
+				return fmt.Errorf("widening: dependency changed for %s", k)
 			}
 		}
 	}

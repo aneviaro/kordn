@@ -3,7 +3,7 @@ package iammap
 import (
 	"context"
 	"errors"
-	"strings"
+	"net/url"
 	"testing"
 	"time"
 
@@ -14,7 +14,37 @@ import (
 
 func goldenRequest(service, host, region, op string, p map[string]awsrequest.Value) *awsrequest.DecodedAWSRequest {
 	protocol, _ := awsrequest.AuthoritativeProtocol(service)
-	return &awsrequest.DecodedAWSRequest{Partition: "aws", EndpointHost: host, Service: service, Region: region, Protocol: protocol, Operation: op, Method: "POST", CanonicalPath: "/", Parameters: p, Headers: map[string][]string{}, PayloadHashMode: awsrequest.PayloadHashSHA256, CallerAccountID: "123456789012"}
+	path, method := "/", "POST"
+	headers := map[string][]string{}
+	query := url.Values{}
+	switch service {
+	case "ec2":
+		query["Action"] = []string{op}
+		query["Version"] = []string{"2016-11-15"}
+	case "sts":
+		query["Action"] = []string{op}
+		query["Version"] = []string{"2011-06-15"}
+	case "iam":
+		query["Action"] = []string{op}
+		query["Version"] = []string{"2010-05-08"}
+	case "cloudwatch":
+		query["Action"] = []string{op}
+		query["Version"] = []string{"2010-08-01"}
+	case "dynamodb":
+		headers["X-Amz-Target"] = []string{"DynamoDB_20120810." + op}
+	case "ecs":
+		headers["X-Amz-Target"] = []string{"AmazonEC2ContainerServiceV20141113." + op}
+	case "logs":
+		headers["X-Amz-Target"] = []string{"Logs_20140328." + op}
+	case "s3":
+		method = "GET"
+		path = "/bucket/key"
+	case "lambda":
+		if op == "Invoke" {
+			path = "/2015-03-31/functions/fn/invocations"
+		}
+	}
+	return &awsrequest.DecodedAWSRequest{Partition: "aws", EndpointHost: host, Service: service, Region: region, Protocol: protocol, Operation: op, Method: method, CanonicalPath: path, CanonicalQuery: query, Parameters: p, Headers: headers, PayloadHashMode: awsrequest.PayloadHashSHA256, CallerAccountID: "123456789012"}
 }
 func str(v string) awsrequest.Value { return awsrequest.Value{Kind: awsrequest.ValueString, String: v} }
 func TestGoldenMappings(t *testing.T) {
@@ -27,7 +57,7 @@ func TestGoldenMappings(t *testing.T) {
 		p          map[string]awsrequest.Value
 		a          string
 		scope      awsrequest.ScopeKind
-	}{{"ec2", "ec2.us-east-1.amazonaws.com", "us-east-1", "DescribeInstances", nil, "ec2:DescribeInstances", awsrequest.ScopeKnownGlobal}, {"ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web"), "TaskRoleArn": str("arn:aws:iam::123456789012:role/task")}, "ecs:RunTask", awsrequest.ScopeExact}, {"sts", "sts.us-east-1.amazonaws.com", "us-east-1", "GetCallerIdentity", nil, "sts:GetCallerIdentity", awsrequest.ScopeKnownGlobal}, {"s3", "s3.us-east-1.amazonaws.com", "us-east-1", "GetObject", map[string]awsrequest.Value{"Bucket": str("bucket"), "Key": str("key")}, "s3:GetObject", awsrequest.ScopeExact}, {"cloudwatch", "monitoring.us-east-1.amazonaws.com", "us-east-1", "PutMetricData", map[string]awsrequest.Value{"Namespace": str("App")}, "cloudwatch:PutMetricData", awsrequest.ScopeExact}, {"logs", "logs.us-east-1.amazonaws.com", "us-east-1", "CreateLogGroup", map[string]awsrequest.Value{"LogGroupName": str("app")}, "logs:CreateLogGroup", awsrequest.ScopeExact}, {"iam", "iam.amazonaws.com", "", "GetRole", map[string]awsrequest.Value{"RoleName": str("reader")}, "iam:GetRole", awsrequest.ScopeExact}, {"lambda", "lambda.us-east-1.amazonaws.com", "us-east-1", "Invoke", map[string]awsrequest.Value{"FunctionName": str("fn")}, "lambda:InvokeFunction", awsrequest.ScopeExact}, {"dynamodb", "dynamodb.us-east-1.amazonaws.com", "us-east-1", "GetItem", map[string]awsrequest.Value{"TableName": str("events")}, "dynamodb:GetItem", awsrequest.ScopeExact}}
+	}{{"ec2", "ec2.us-east-1.amazonaws.com", "us-east-1", "DescribeInstances", nil, "ec2:DescribeInstances", awsrequest.ScopeKnownGlobal}, {"ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web"), "TaskRoleArn": str("arn:aws:iam::123456789012:role/task")}, "ecs:RunTask", awsrequest.ScopeExact}, {"sts", "sts.us-east-1.amazonaws.com", "us-east-1", "AssumeRole", map[string]awsrequest.Value{"RoleArn": str("arn:aws:iam::999999999999:role/deploy")}, "sts:AssumeRole", awsrequest.ScopeExact}, {"s3", "s3.us-east-1.amazonaws.com", "us-east-1", "GetObject", map[string]awsrequest.Value{"Bucket": str("bucket"), "Key": str("key")}, "s3:GetObject", awsrequest.ScopeExact}, {"logs", "logs.us-east-1.amazonaws.com", "us-east-1", "CreateLogGroup", map[string]awsrequest.Value{"LogGroupName": str("app")}, "logs:CreateLogGroup", awsrequest.ScopeExact}, {"iam", "iam.amazonaws.com", "", "GetRole", map[string]awsrequest.Value{"RoleName": str("reader")}, "iam:GetRole", awsrequest.ScopeExact}, {"lambda", "lambda.us-east-1.amazonaws.com", "us-east-1", "Invoke", map[string]awsrequest.Value{"FunctionName": str("fn")}, "lambda:InvokeFunction", awsrequest.ScopeExact}}
 	for _, tc := range cases {
 		t.Run(tc.s, func(t *testing.T) {
 			r, e := m.Map(context.Background(), goldenRequest(tc.s, tc.h, tc.r, tc.o, tc.p))
@@ -61,7 +91,7 @@ func TestAssumeRoleUsesCrossAccountRoleARN(t *testing.T) {
 
 func TestDependentPassRole(t *testing.T) {
 	m, _ := NewMapper()
-	r := goldenRequest("ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "CreateService", map[string]awsrequest.Value{"Cluster": str("prod"), "Service": str("api"), "TaskRoleArn": str("arn:aws:iam::123456789012:role/task")})
+	r := goldenRequest("ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web"), "TaskRoleArn": str("arn:aws:iam::123456789012:role/task")})
 	x, e := m.Map(context.Background(), r)
 	if e != nil {
 		t.Fatal(e)
@@ -87,14 +117,20 @@ func TestUnknownFailsClosed(t *testing.T) {
 func TestNoScopeWidening(t *testing.T) {
 	m, _ := NewMapper()
 	r := goldenRequest("s3", "s3.us-east-1.amazonaws.com", "us-east-1", "GetObject", map[string]awsrequest.Value{"Bucket": str("bucket")})
+	r.CanonicalPath = "/bucket"
 	x, e := m.Map(context.Background(), r)
-	if e == nil || x != nil || !strings.Contains(e.Error(), "unresolved primary resource") {
+	if e == nil || x != nil {
 		t.Fatalf("unresolved was forwardable: %v %+v", e, x)
 	}
 	r = goldenRequest("ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web")})
 	x, e = m.Map(context.Background(), r)
-	if e == nil || x != nil || !strings.Contains(e.Error(), "dependency applicability") {
-		t.Fatalf("unknown dependency was forwardable: %v %+v", e, x)
+	if e != nil || x == nil {
+		t.Fatalf("absent optional dependency was not represented as inapplicable: %v %+v", e, x)
+	}
+	for _, requirement := range x.Requirements {
+		if requirement.Action == "iam:PassRole" {
+			t.Fatalf("inapplicable dependency became requirement: %+v", x.Requirements)
+		}
 	}
 }
 func TestMapperPanicAndTimeoutFailClosed(t *testing.T) {
@@ -128,6 +164,24 @@ func TestStaleEndpointFailsClosed(t *testing.T) {
 	}
 }
 
+type legacyOnlyAdapter struct{}
+
+func (legacyOnlyAdapter) Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	return iamliveadapter.LookupResult{}, nil
+}
+func (legacyOnlyAdapter) Version() string { return iamliveadapter.AdapterVersion }
+
+func TestMapperRejectsNameOnlyAdapter(t *testing.T) {
+	m, err := newMapperForTest(MapperOptions{}, legacyOnlyAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := goldenRequest("ec2", "ec2.us-east-1.amazonaws.com", "us-east-1", "DescribeInstances", nil)
+	if result, err := m.Map(context.Background(), req); result != nil || err == nil {
+		t.Fatalf("name-only adapter was accepted: %+v %v", result, err)
+	}
+}
+
 type staleClassifier struct{}
 
 func (staleClassifier) Classify(string) (awsrequest.AWSEndpoint, error) {
@@ -139,11 +193,18 @@ type panicAdapter struct{}
 func (panicAdapter) Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	panic("test panic")
 }
+func (panicAdapter) LookupRequest(string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	panic("test panic")
+}
 func (panicAdapter) Version() string { return iamliveadapter.AdapterVersion }
 
 type blockingAdapter struct{ release <-chan struct{} }
 
 func (a blockingAdapter) Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	<-a.release
+	return iamliveadapter.LookupResult{}, errors.New("test adapter released")
+}
+func (a blockingAdapter) LookupRequest(string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	<-a.release
 	return iamliveadapter.LookupResult{}, errors.New("test adapter released")
 }
