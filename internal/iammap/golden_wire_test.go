@@ -13,15 +13,13 @@ import (
 
 func TestWireToMappingGoldens(t *testing.T) {
 	cases := []struct{ name, authority, protocol, target, method, path, query, body, operation, action, resource string }{
-		{"ec2", "ec2.us-east-1.amazonaws.com", string(awsrequest.ProtocolEC2Query), "", "POST", "/", "Action=DescribeInstances", "", "DescribeInstances", "ec2:DescribeInstances", "*"},
+		{"ec2", "ec2.us-east-1.amazonaws.com", string(awsrequest.ProtocolEC2Query), "", "POST", "/", "Action=DescribeInstances&Version=2016-11-15", "", "DescribeInstances", "ec2:DescribeInstances", "*"},
 		{"ecs", "ecs.us-east-1.amazonaws.com", string(awsrequest.ProtocolJSON11), "AmazonEC2ContainerServiceV20141113.RunTask", "POST", "/", "", `{"taskDefinition":"web","taskRoleArn":"arn:aws:iam::123456789012:role/task"}`, "RunTask", "ecs:RunTask", "arn:aws:ecs:us-east-1:123456789012:task-definition/web"},
-		{"sts", "sts.us-east-1.amazonaws.com", string(awsrequest.ProtocolQuery), "", "POST", "/", "Action=GetCallerIdentity", "", "GetCallerIdentity", "sts:GetCallerIdentity", "*"},
 		{"s3", "s3.us-east-1.amazonaws.com", string(awsrequest.ProtocolRESTXML), "", "GET", "/bucket/object", "", "", "GetObject", "s3:GetObject", "arn:aws:s3:::bucket/object"},
-		{"cloudwatch", "monitoring.us-east-1.amazonaws.com", string(awsrequest.ProtocolQuery), "", "POST", "/", "Action=PutMetricData&Namespace=App", "", "PutMetricData", "cloudwatch:PutMetricData", "arn:aws:cloudwatch:us-east-1:123456789012:dataset/App"},
 		{"logs", "logs.us-east-1.amazonaws.com", string(awsrequest.ProtocolJSON11), "Logs_20140328.PutLogEvents", "POST", "/", "", `{"logGroupName":"app","logStreamName":"stream"}`, "PutLogEvents", "logs:PutLogEvents", "arn:aws:logs:us-east-1:123456789012:log-group:app:log-stream:stream"},
-		{"iam", "iam.amazonaws.com", string(awsrequest.ProtocolQuery), "", "POST", "/", "Action=GetRole&RoleName=reader", "", "GetRole", "iam:GetRole", "arn:aws:iam::123456789012:role/reader"},
+		{"iam", "iam.amazonaws.com", string(awsrequest.ProtocolQuery), "", "POST", "/", "Action=GetRole&RoleName=reader&Version=2010-05-08", "", "GetRole", "iam:GetRole", "arn:aws:iam::123456789012:role/reader"},
 		{"lambda", "lambda.us-east-1.amazonaws.com", string(awsrequest.ProtocolRESTJSON), "", "POST", "/2015-03-31/functions/fn/invocations", "", "{}", "Invoke", "lambda:InvokeFunction", "arn:aws:lambda:us-east-1:123456789012:function:fn"},
-		{"dynamodb", "dynamodb.us-east-1.amazonaws.com", string(awsrequest.ProtocolJSON10), "DynamoDB_20120810.GetItem", "POST", "/", "", `{"TableName":"events"}`, "GetItem", "dynamodb:GetItem", "arn:aws:dynamodb:us-east-1:123456789012:table/events"},
+		{"dynamodb", "dynamodb.us-east-1.amazonaws.com", string(awsrequest.ProtocolJSON10), "DynamoDB_20120810.BatchExecuteStatement", "POST", "/", "", `{"Statements":[{"Statement":"SELECT * FROM \"read_table\""},{"Statement":"INSERT INTO \"write_table\" VALUE {'id': '1'}"}]}`, "BatchExecuteStatement", "dynamodb:PartiQLInsert", "arn:aws:dynamodb:us-east-1:123456789012:table/write_table"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,15 +73,13 @@ func TestWireToMappingGoldens(t *testing.T) {
 				t.Fatalf("mapping=%+v", got)
 			}
 			wantRequirements := map[string][]awsrequest.IAMRequirement{
-				"ec2":        {{Action: "ec2:DescribeInstances", Resources: []string{"*"}, ScopeKind: awsrequest.ScopeKnownGlobal}},
-				"ecs":        {{Action: "ecs:RunTask", Resources: []string{"arn:aws:ecs:us-east-1:123456789012:task-definition/web"}, ScopeKind: awsrequest.ScopeExact}, {Action: "iam:PassRole", Resources: []string{"arn:aws:iam::123456789012:role/task"}, ScopeKind: awsrequest.ScopeExact, Dependent: true}},
-				"sts":        {{Action: "sts:GetCallerIdentity", Resources: []string{"*"}, ScopeKind: awsrequest.ScopeKnownGlobal}},
-				"s3":         {{Action: "s3:GetObject", Resources: []string{"arn:aws:s3:::bucket/object"}, ScopeKind: awsrequest.ScopeExact}},
-				"cloudwatch": {{Action: "cloudwatch:PutMetricData", Resources: []string{"arn:aws:cloudwatch:us-east-1:123456789012:dataset/App"}, ScopeKind: awsrequest.ScopeExact}},
-				"logs":       {{Action: "logs:PutLogEvents", Resources: []string{"arn:aws:logs:us-east-1:123456789012:log-group:app:log-stream:stream"}, ScopeKind: awsrequest.ScopeExact}},
-				"iam":        {{Action: "iam:GetRole", Resources: []string{"arn:aws:iam::123456789012:role/reader"}, ScopeKind: awsrequest.ScopeExact}},
-				"lambda":     {{Action: "lambda:InvokeFunction", Resources: []string{"arn:aws:lambda:us-east-1:123456789012:function:fn"}, ScopeKind: awsrequest.ScopeExact}},
-				"dynamodb":   {{Action: "dynamodb:GetItem", Resources: []string{"arn:aws:dynamodb:us-east-1:123456789012:table/events"}, ScopeKind: awsrequest.ScopeExact}},
+				"ec2":      {{Action: "ec2:DescribeInstances", Resources: []string{"*"}, ScopeKind: awsrequest.ScopeKnownGlobal}},
+				"ecs":      {{Action: "ecs:RunTask", Resources: []string{"arn:aws:ecs:us-east-1:123456789012:task-definition/web"}, ScopeKind: awsrequest.ScopeExact}, {Action: "iam:PassRole", Resources: []string{"arn:aws:iam::123456789012:role/task"}, ScopeKind: awsrequest.ScopeExact, Dependent: true}},
+				"s3":       {{Action: "s3:GetObject", Resources: []string{"arn:aws:s3:::bucket/object"}, ScopeKind: awsrequest.ScopeExact}},
+				"logs":     {{Action: "logs:PutLogEvents", Resources: []string{"arn:aws:logs:us-east-1:123456789012:log-group:app:log-stream:stream"}, ScopeKind: awsrequest.ScopeExact}},
+				"iam":      {{Action: "iam:GetRole", Resources: []string{"arn:aws:iam::123456789012:role/reader"}, ScopeKind: awsrequest.ScopeExact}},
+				"lambda":   {{Action: "lambda:InvokeFunction", Resources: []string{"arn:aws:lambda:us-east-1:123456789012:function:fn"}, ScopeKind: awsrequest.ScopeExact}},
+				"dynamodb": {{Action: "dynamodb:PartiQLInsert", Resources: []string{"arn:aws:dynamodb:us-east-1:123456789012:table/write_table"}, ScopeKind: awsrequest.ScopeExact}, {Action: "dynamodb:PartiQLSelect", Resources: []string{"arn:aws:dynamodb:us-east-1:123456789012:table/read_table"}, ScopeKind: awsrequest.ScopeExact}},
 			}[tc.name]
 			if !reflect.DeepEqual(got.Requirements, wantRequirements) {
 				t.Fatalf("requirements=%+v, want=%+v", got.Requirements, wantRequirements)

@@ -20,7 +20,10 @@ type crosscheckAdapter struct {
 }
 
 func (a crosscheckAdapter) Lookup(service, operation string, parameters ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
-	result, err := a.real.Lookup(service, operation, parameters...)
+	return a.real.Lookup(service, operation, parameters...)
+}
+func (a crosscheckAdapter) LookupRequest(service, operation string, identity iamliveadapter.WireIdentity, parameters map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	result, err := a.real.LookupRequest(service, operation, identity, parameters)
 	if err != nil {
 		return result, err
 	}
