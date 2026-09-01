@@ -40,9 +40,18 @@ type Service struct {
 type Operation struct {
 	Service, Name, InputShape, OutputShape string
 	Route                                  Route
+	QueryBindings                          []QueryBinding
 	Mappings                               []ActionMapping
 	MappingState                           EvidenceState
 	State                                  EvidenceState
+}
+
+// QueryBinding describes a modeled REST query-string member. Required is
+// derived from the input shape's required list, while LocationName is the wire
+// name (or the member name when the model omits locationName).
+type QueryBinding struct {
+	Member, LocationName string
+	Required             bool
 }
 
 type Route struct {
@@ -105,6 +114,7 @@ func cloneOperations(in []Operation) []Operation {
 	return out
 }
 func (o Operation) Clone() Operation {
+	o.QueryBindings = append([]QueryBinding(nil), o.QueryBindings...)
 	o.Mappings = cloneMappings(o.Mappings)
 	return o
 }

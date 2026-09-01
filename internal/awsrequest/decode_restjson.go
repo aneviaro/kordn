@@ -86,7 +86,7 @@ func restOperationFromCatalog(service, path, method string, q url.Values, protoc
 				if err != nil {
 					return "", nil, err
 				}
-				if !ok {
+				if !ok || !matchRESTQueryBindings(o.Route.URI, o.QueryBindings, q, l) {
 					continue
 				}
 				matches++
@@ -183,10 +183,57 @@ func matchRESTURI(uri, requestPath string, q url.Values, l DecodeLimits) (map[st
 			want[key] = []string{value}
 		}
 	}
-	if !reflect.DeepEqual(want, q) {
-		return nil, false, nil
+	for key, values := range want {
+		actual, ok := q[key]
+		if !ok || !reflect.DeepEqual(actual, values) {
+			return nil, false, nil
+		}
 	}
 	return params, true, nil
+}
+
+// matchRESTQueryBindings applies the Smithy input shape rather than guessing
+// from operation names or treating every query parameter as a wildcard. An
+// operation's required query members must be present, and every supplied
+// non-routing query name must be modeled by that operation.
+func matchRESTQueryBindings(uri string, bindings []iamlivecatalog.QueryBinding, q url.Values, l DecodeLimits) bool {
+	fixed := map[string]bool{}
+	_, query, _ := strings.Cut(uri, "?")
+	if query != "" {
+		for _, field := range strings.Split(query, "&") {
+			parts := strings.SplitN(field, "=", 2)
+			key, err := url.QueryUnescape(parts[0])
+			if err != nil || key == "" || len(key) > l.MaxTokenBytes {
+				return false
+			}
+			fixed[key] = true
+		}
+	}
+	modeled := map[string]iamlivecatalog.QueryBinding{}
+	for _, binding := range bindings {
+		if binding.LocationName == "" || len(binding.LocationName) > l.MaxTokenBytes {
+			return false
+		}
+		if _, exists := modeled[binding.LocationName]; exists {
+			return false
+		}
+		modeled[binding.LocationName] = binding
+	}
+	for key := range q {
+		if !fixed[key] {
+			if _, ok := modeled[key]; !ok {
+				return false
+			}
+		}
+	}
+	for key, binding := range modeled {
+		if binding.Required {
+			if _, ok := q[key]; !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func restPathParts(path string) ([]string, bool) {
