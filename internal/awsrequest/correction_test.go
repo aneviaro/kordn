@@ -182,3 +182,40 @@ func TestConfiguredDecoderUsesTrustedCallerContext(t *testing.T) {
 		t.Fatalf("caller context not retained: %q", out.CallerAccountID)
 	}
 }
+
+func TestWireOperationRouteConflictStripsOperationEvidence(t *testing.T) {
+	tests := []struct {
+		name, host, contentType, target, path, query, body string
+		protocol                                           AWSProtocol
+	}{
+		{"json", "ecs.us-east-1.amazonaws.com", "application/x-amz-json-1.1", "AmazonEC2ContainerServiceV20141113.DescribeServices", "/some/rest/path", "", "{", ProtocolJSON11},
+		{"query", "sts.us-east-1.amazonaws.com", "application/x-www-form-urlencoded", "", "/some/rest/path", "Action=AssumeRole&Version=2011-06-15", "", ProtocolQuery},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := DefaultEndpointClassifier.Classify(tc.host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := http.NewRequest(http.MethodPost, "https://"+e.Host+tc.path, strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Host = e.Host
+			r.URL.RawQuery = tc.query
+			r.Header.Set("Content-Type", tc.contentType)
+			if tc.target != "" {
+				r.Header.Set("X-Amz-Target", tc.target)
+			}
+			v := &VerifiedRequest{Request: r, Endpoint: e, Protocol: tc.protocol, SigningScheme: SigningHeaderV4, SigningRegion: e.Region, SigningService: e.Service, PayloadMode: PayloadHashSHA256}
+			_, err = NewDecoder().Decode(context.Background(), v, e)
+			if err == nil {
+				t.Fatal("route conflict was accepted")
+			}
+			evidence, ok := DecodeFailureEvidenceFromError(err)
+			if !ok || !evidence.HasProtocol() || evidence.Protocol != tc.protocol || evidence.HasOperation() {
+				t.Fatalf("route conflict evidence = %#v, %v", evidence, ok)
+			}
+		})
+	}
+}

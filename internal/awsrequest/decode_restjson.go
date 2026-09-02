@@ -13,27 +13,28 @@ import (
 )
 
 func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
+	op, route, e := restOperationFromCatalog(service, path, method, q, ProtocolRESTJSON, c, l)
+	if e != nil {
+		return "", nil, e
+	}
+	validated := DecodeFailureEvidence{Service: service, Protocol: ProtocolRESTJSON, ProtocolAvailable: true, ProtocolCertainty: EvidenceAuthoritative, Operation: op, OperationAvailable: true, OperationCertainty: EvidenceValidated}
 	p := map[string]Value{}
 	if len(bytes.TrimSpace(body)) > 0 {
 		d := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(body)))
 		d.UseNumber()
 		v, e := parseJSONValue(d, 0, l)
 		if e != nil || v.Kind != ValueObject {
-			return "", nil, errors.New("REST-JSON body is malformed")
+			return "", nil, NewDecodeFailureError(validated, errors.New("REST-JSON body is malformed"))
 		}
 		var extra json.Token
 		if e = d.Decode(&extra); e != io.EOF {
-			return "", nil, errors.New("REST-JSON body has trailing data")
+			return "", nil, NewDecodeFailureError(validated, errors.New("REST-JSON body has trailing data"))
 		}
 		p = v.Object
 	}
-	op, route, e := restOperationFromCatalog(service, path, method, q, ProtocolRESTJSON, c, l)
-	if e != nil {
-		return "", nil, e
-	}
 	for k, v := range route {
 		if old, ok := p[k]; ok && !reflect.DeepEqual(old, v) {
-			return "", nil, errors.New("REST path/body evidence conflicts")
+			return "", nil, NewDecodeFailureError(validated, errors.New("REST path/body evidence conflicts"))
 		}
 		p[k] = v
 	}
@@ -79,7 +80,7 @@ func restOperationFromCatalog(service, path, method string, q url.Values, protoc
 				continue
 			}
 			for _, o := range s.Operations {
-				if o.Service != service || o.Route.Method != method {
+				if o.Service != service || !validEvidenceService(o.Service) || !validEvidenceOperation(o.Name) || o.Route.Method != method {
 					continue
 				}
 				candidate, ok, err := matchRESTURI(o.Route.URI, path, q, l)

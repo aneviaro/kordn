@@ -1010,7 +1010,7 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 	// through decode, resign, and forwarding, then release it on every outcome.
 	defer sigv4.CloseBody(verified.Request)
 	if s.config.Decoder == nil {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "decode", nil)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "decode", nil, pipelineFailureEvidence{})
 		return
 	}
 	decodeStart := time.Now()
@@ -1018,15 +1018,15 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 	decodeElapsed := time.Since(decodeStart)
 	s.metrics.Observe(observe.DecodeLatency, decodeElapsed)
 	if err != nil || decoded == nil {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "unknown_operation", "decode", err)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "unknown_operation", "decode", err, pipelineFailureEvidence{decode: safeDecodeFailureEvidence(err, endpoint, verified.Protocol)})
 		return
 	}
 	if err = decoded.Validate(); err != nil || decoded.EndpointHost != endpoint.Host || decoded.Service != endpoint.Service || decoded.Partition != endpoint.Partition {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "decode", err)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "decode", err, pipelineFailureEvidence{})
 		return
 	}
 	if s.config.Mapper == nil {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "map", nil)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "map", nil, pipelineFailureEvidence{decoded: decoded})
 		return
 	}
 	mappingKey := s.mappingCacheKey(runID, endpoint, decoded)
@@ -1052,11 +1052,11 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 		s.metrics.Observe(observe.MapLatency, mapElapsed)
 	}
 	if err != nil || mapping == nil {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, mapReason(err), "map", err)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, mapReason(err), "map", err, pipelineFailureEvidence{decoded: decoded})
 		return
 	}
 	if err = mapping.Validate(); err != nil || mapping.Service != decoded.Service || mapping.Operation != decoded.Operation {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "mapping_low_confidence", "map", err)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "mapping_low_confidence", "map", err, pipelineFailureEvidence{decoded: decoded})
 		return
 	}
 	if s.caches != nil && mappingKey != "" {
@@ -1065,12 +1065,12 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 		}
 	}
 	if s.config.Policy == nil {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "policy", nil)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "policy", nil, pipelineFailureEvidence{decoded: decoded})
 		return
 	}
 	input := policy.DecisionInput{RunID: runID, Endpoint: endpoint, Request: decoded, Mapping: mapping, PolicyHash: s.config.PolicyHash, MapperVersion: mapping.MapperVersion}
 	if err := input.Validate(); err != nil {
-		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "policy", err)
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "policy", err, pipelineFailureEvidence{decoded: decoded})
 		return
 	}
 	decisionKey := s.decisionCacheKey(runID, endpoint, decoded, mapping)
@@ -1232,13 +1232,22 @@ func (s *Server) acceptAudit(ctx context.Context, e audit.Event) error {
 	}
 	return nil
 }
-func (s *Server) finishFailedPipeline(w http.ResponseWriter, req *http.Request, ep awsrequest.AWSEndpoint, runID string, start time.Time, reason, stage string, cause error) {
-	_ = cause
+
+type pipelineFailureEvidence struct {
+	decoded *awsrequest.DecodedAWSRequest
+	decode  awsrequest.DecodeFailureEvidence
+}
+
+func (s *Server) finishFailedPipeline(w http.ResponseWriter, req *http.Request, ep awsrequest.AWSEndpoint, runID string, start time.Time, reason, stage string, cause error, evidence pipelineFailureEvidence) {
+	_ = cause // Typed decode errors retain causes for diagnostics, never for wire output.
 	s.metrics.Inc("pipeline." + safeMetricLabel(stage) + "." + safeMetricLabel(reason))
 	id := audit.NewID()
 	d := policy.Decision{Result: policy.DecisionDeny, ReasonCode: awserror.ReasonCode(reason)}
-	decoded := fallbackDecoded(req, ep)
-	mapping := fallbackMapping(ep, decoded, stage)
+	decoded := evidence.decoded
+	if decoded == nil {
+		decoded = failureDecoded(req, ep, evidence.decode)
+	}
+	mapping := failureMapping(decoded, stage)
 	ev := decisionEvent(runID, id, req, decoded, mapping, d, start, s.config.PolicyHash, s.config.LogResourceARNs, s.config.HashResourceNames)
 	if s.acceptAudit(req.Context(), ev) != nil {
 		reason = "audit_unavailable"
@@ -1247,15 +1256,44 @@ func (s *Server) finishFailedPipeline(w http.ResponseWriter, req *http.Request, 
 	}
 	s.respondPipelineDeny(w, ep, decoded, reason, id)
 }
-func fallbackDecoded(req *http.Request, ep awsrequest.AWSEndpoint) *awsrequest.DecodedAWSRequest {
+
+func safeDecodeFailureEvidence(err error, ep awsrequest.AWSEndpoint, claimed awsrequest.AWSProtocol) awsrequest.DecodeFailureEvidence {
+	evidence, ok := awsrequest.DecodeFailureEvidenceFromError(err)
+	if !ok || evidence.Validate() != nil || evidence.Service != ep.Service || (evidence.ProtocolAvailable && evidence.Protocol != claimed) {
+		return awsrequest.DecodeFailureEvidence{}
+	}
+	return evidence
+}
+
+func failureDecoded(req *http.Request, ep awsrequest.AWSEndpoint, evidence awsrequest.DecodeFailureEvidence) *awsrequest.DecodedAWSRequest {
+	if evidence.Validate() != nil || (evidence.Service != "" && evidence.Service != ep.Service) {
+		evidence = awsrequest.DecodeFailureEvidence{}
+	}
 	method := "POST"
 	if req != nil && req.Method != "" {
 		method = req.Method
 	}
-	return &awsrequest.DecodedAWSRequest{Partition: ep.Partition, EndpointHost: ep.Host, Service: ep.Service, Region: ep.Region, CallerAccountID: "000000000000", Protocol: awsrequest.ProtocolJSON11, Operation: "Unknown", Method: method, CanonicalPath: "/", PayloadHashMode: awsrequest.PayloadHashEmpty, Parameters: map[string]awsrequest.Value{}}
+	protocol := awsrequest.ProtocolJSON11
+	if evidence.HasProtocol() {
+		protocol = evidence.Protocol
+	}
+	service := ep.Service
+	if service == "" {
+		service = "unknown"
+	}
+	operation := "Unknown"
+	if evidence.HasOperation() {
+		operation = evidence.Operation
+	}
+	return &awsrequest.DecodedAWSRequest{Partition: ep.Partition, EndpointHost: ep.Host, Service: service, Region: ep.Region, Protocol: protocol, Operation: operation, Method: method, CanonicalPath: "/", PayloadHashMode: awsrequest.PayloadHashEmpty, Parameters: map[string]awsrequest.Value{}}
 }
-func fallbackMapping(ep awsrequest.AWSEndpoint, r *awsrequest.DecodedAWSRequest, stage string) *awsrequest.MappingResult {
-	return &awsrequest.MappingResult{Service: ep.Service, Operation: r.Operation, MapperVersion: "kordn/unknown", Confidence: awsrequest.ConfidenceUnknown, Requirements: []awsrequest.IAMRequirement{{Action: ep.Service + ":Unknown", Resources: []string{"unknown"}, ScopeKind: awsrequest.ScopeUnresolved}}, Evidence: []awsrequest.MappingEvidence{{Source: stage, Field: "status", Value: "rejected"}}}
+
+func failureMapping(r *awsrequest.DecodedAWSRequest, stage string) *awsrequest.MappingResult {
+	service := r.Service
+	if service == "" {
+		service = "unknown"
+	}
+	return &awsrequest.MappingResult{Service: service, Operation: r.Operation, MapperVersion: "kordn/unknown", Confidence: awsrequest.ConfidenceUnknown, Requirements: []awsrequest.IAMRequirement{{Action: service + ":Unknown", Resources: []string{"unknown"}, ScopeKind: awsrequest.ScopeUnresolved}}, Evidence: []awsrequest.MappingEvidence{{Source: stage, Field: "status", Value: "rejected"}}}
 }
 func decisionEvent(run, id string, req *http.Request, decoded *awsrequest.DecodedAWSRequest, m *awsrequest.MappingResult, d policy.Decision, start time.Time, policyHash string, logResourceARNs, hashResourceNames bool) audit.Event {
 	e := audit.NewEvent(run, audit.RequestDecision)

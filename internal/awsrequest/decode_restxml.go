@@ -14,16 +14,17 @@ func decodeRESTXMLBody(body []byte, service, path, method string, q url.Values, 
 	if e != nil {
 		return "", nil, e
 	}
+	validated := DecodeFailureEvidence{Service: service, Protocol: ProtocolRESTXML, ProtocolAvailable: true, ProtocolCertainty: EvidenceAuthoritative, Operation: op, OperationAvailable: true, OperationCertainty: EvidenceValidated}
 	if len(body) == 0 || op == "PutObject" {
 		return op, p, nil
 	}
 	x, e := parseXMLParameters(body, l)
 	if e != nil {
-		return "", nil, e
+		return "", nil, NewDecodeFailureError(validated, e)
 	}
 	for k, v := range x {
 		if old, ok := p[k]; ok && !reflect.DeepEqual(old, v) {
-			return "", nil, errors.New("REST-XML path/body evidence conflicts")
+			return "", nil, NewDecodeFailureError(validated, errors.New("REST-XML path/body evidence conflicts"))
 		}
 		p[k] = v
 	}
