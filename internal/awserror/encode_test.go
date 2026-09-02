@@ -52,3 +52,20 @@ func TestEncodeRejectsAllowReason(t *testing.T) {
 		t.Fatal("allow reason was encoded as a denial")
 	}
 }
+
+func TestEncodeLocalDenialCorrelatesNativeBodies(t *testing.T) {
+	for _, protocol := range []awsrequest.AWSProtocol{awsrequest.ProtocolQuery, awsrequest.ProtocolEC2Query, awsrequest.ProtocolRESTXML, awsrequest.ProtocolRESTJSON} {
+		response := Encode(protocol, Denial{Service: "sts", Operation: "AssumeRole", ReasonCode: ReasonPolicyNoMatchingAllow, EventID: "evt-correlated", Classification: LocalDeny})
+		if response == nil || response.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s: denial response missing", protocol)
+		}
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		if !strings.Contains(text, "policy_no_matching_allow") || !strings.Contains(text, "evt-correlated") {
+			t.Fatalf("%s: body lost correlation: %q", protocol, text)
+		}
+	}
+}

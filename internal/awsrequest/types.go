@@ -22,6 +22,148 @@ type VerifiedRequest struct {
 	PayloadMode    PayloadHashMode
 }
 
+// EvidenceCertainty records the validation boundary reached by decoder
+// evidence. Operation evidence is available only after an exact, unambiguous
+// catalog identity has been validated; protocol evidence is available only
+// after authentication, endpoint, content type, and catalog agreement.
+type EvidenceCertainty string
+
+const (
+	EvidenceUnknown       EvidenceCertainty = "unknown"
+	EvidenceAuthoritative EvidenceCertainty = "authoritative"
+	EvidenceValidated     EvidenceCertainty = "validated"
+)
+
+// DecodeFailureEvidence is the bounded, non-secret portion of a decoder
+// failure that may safely shape a local denial. It intentionally contains no
+// request headers, query values, body bytes, or authentication material.
+type DecodeFailureEvidence struct {
+	Service            string            `json:"service,omitempty"`
+	Protocol           AWSProtocol       `json:"protocol,omitempty"`
+	ProtocolAvailable  bool              `json:"protocol_available"`
+	ProtocolCertainty  EvidenceCertainty `json:"protocol_certainty"`
+	Operation          string            `json:"operation,omitempty"`
+	OperationAvailable bool              `json:"operation_available"`
+	OperationCertainty EvidenceCertainty `json:"operation_certainty"`
+}
+
+func (e DecodeFailureEvidence) Validate() error {
+	if e.Service != "" && !validEvidenceService(e.Service) {
+		return fmt.Errorf("invalid evidence service %q", e.Service)
+	}
+	if e.ProtocolAvailable {
+		if e.Service == "" || !e.Protocol.Supported() || e.ProtocolCertainty != EvidenceAuthoritative {
+			return errors.New("available protocol evidence is not authoritative")
+		}
+	} else if e.Protocol != "" || (e.ProtocolCertainty != "" && e.ProtocolCertainty != EvidenceUnknown) {
+		return errors.New("unavailable protocol evidence must be empty and unknown")
+	}
+	if e.OperationAvailable {
+		if !e.ProtocolAvailable || e.Service == "" || !validEvidenceOperation(e.Operation) || e.OperationCertainty != EvidenceValidated {
+			return errors.New("available operation evidence is not validated")
+		}
+	} else if e.Operation != "" || (e.OperationCertainty != "" && e.OperationCertainty != EvidenceUnknown) {
+		return errors.New("unavailable operation evidence must be empty and unknown")
+	}
+	return nil
+}
+
+func (e DecodeFailureEvidence) HasProtocol() bool {
+	return e.ProtocolAvailable && e.Protocol.Supported()
+}
+func (e DecodeFailureEvidence) HasOperation() bool {
+	return e.OperationAvailable && validEvidenceOperation(e.Operation)
+}
+
+// DecodeFailureError preserves the decoder cause while carrying only
+// progressive, validated evidence. It is errors.As-friendly for pipeline
+// consumers and does not expose the cause in any wire response.
+type DecodeFailureError struct {
+	Evidence DecodeFailureEvidence
+	Cause    error
+}
+
+func (e *DecodeFailureError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "request decode failed"
+	}
+	return e.Cause.Error()
+}
+func (e *DecodeFailureError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+type DecodeError = DecodeFailureError
+
+func NewDecodeFailureError(evidence DecodeFailureEvidence, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	if !evidence.ProtocolAvailable && evidence.ProtocolCertainty == "" {
+		evidence.ProtocolCertainty = EvidenceUnknown
+	}
+	if !evidence.OperationAvailable && evidence.OperationCertainty == "" {
+		evidence.OperationCertainty = EvidenceUnknown
+	}
+	if evidence.Validate() != nil {
+		evidence = DecodeFailureEvidence{ProtocolCertainty: EvidenceUnknown, OperationCertainty: EvidenceUnknown}
+	}
+	return &DecodeFailureError{Evidence: evidence, Cause: cause}
+}
+
+func DecodeFailureEvidenceFromError(err error) (DecodeFailureEvidence, bool) {
+	var failure *DecodeFailureError
+	if err == nil || !errors.As(err, &failure) || failure == nil || failure.Evidence.Validate() != nil {
+		return DecodeFailureEvidence{}, false
+	}
+	return failure.Evidence, true
+}
+
+// AttachDecodeFailureEvidence adds only evidence which is compatible with the
+// strongest evidence already attached to an error. Conflicts fail closed.
+func AttachDecodeFailureEvidence(err error, evidence DecodeFailureEvidence) error {
+	if err == nil {
+		return nil
+	}
+	if evidence.Validate() != nil {
+		return err
+	}
+	if existing, ok := DecodeFailureEvidenceFromError(err); ok {
+		if (existing.Service != "" && evidence.Service != "" && existing.Service != evidence.Service) ||
+			(existing.ProtocolAvailable && evidence.ProtocolAvailable && existing.Protocol != evidence.Protocol) ||
+			(existing.OperationAvailable && evidence.OperationAvailable && existing.Operation != evidence.Operation) {
+			return NewDecodeFailureError(DecodeFailureEvidence{ProtocolCertainty: EvidenceUnknown, OperationCertainty: EvidenceUnknown}, err)
+		}
+		if existing.Service == "" {
+			existing.Service = evidence.Service
+		}
+		if !existing.ProtocolAvailable && evidence.ProtocolAvailable {
+			existing.Protocol, existing.ProtocolAvailable, existing.ProtocolCertainty = evidence.Protocol, true, evidence.ProtocolCertainty
+		}
+		if !existing.OperationAvailable && evidence.OperationAvailable {
+			existing.Operation, existing.OperationAvailable, existing.OperationCertainty = evidence.Operation, true, evidence.OperationCertainty
+		}
+		evidence = existing
+	}
+	return NewDecodeFailureError(evidence, err)
+}
+
+func validEvidenceService(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+func validEvidenceOperation(value string) bool { return len(value) <= 128 && validOperation(value) }
+
 func (r VerifiedRequest) Validate() error {
 	if r.Request == nil {
 		return errors.New("verified request is nil")

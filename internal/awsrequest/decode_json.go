@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 
 	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
@@ -202,11 +203,64 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 	if want, ok := authoritativeProtocolFor(d.catalog, e.Service); !ok || protocol != want {
 		return nil, fmt.Errorf("protocol %q is not authoritative for endpoint service %q", protocol, e.Service)
 	}
+	protocolEvidence := DecodeFailureEvidence{Service: e.Service, Protocol: protocol, ProtocolAvailable: true, ProtocolCertainty: EvidenceAuthoritative}
+
+	// Check all route indicators before reading or parsing the body. A route that
+	// cannot be produced by the selected wire model is a protocol-level conflict;
+	// it must not lend operation identity to a later failure.
+	requestQuery, routeErr := parseQueryString(r.URL.RawQuery, d.limits)
+	if routeErr != nil {
+		return nil, NewDecodeFailureError(protocolEvidence, routeErr)
+	}
+	switch protocol {
+	case ProtocolQuery, ProtocolEC2Query:
+		if len(r.Header.Values("X-Amz-Target")) != 0 {
+			return nil, NewDecodeFailureError(protocolEvidence, errors.New("JSON target is not valid for this protocol"))
+		}
+	case ProtocolRESTJSON, ProtocolRESTXML:
+		if len(r.Header.Values("X-Amz-Target")) != 0 {
+			return nil, NewDecodeFailureError(protocolEvidence, errors.New("JSON target is not valid for this protocol"))
+		}
+		if _, ok := requestQuery["Action"]; ok {
+			return nil, NewDecodeFailureError(protocolEvidence, errors.New("query Action conflicts with protocol operation"))
+		}
+	case ProtocolJSON10, ProtocolJSON11:
+		if _, ok := requestQuery["Action"]; ok {
+			return nil, NewDecodeFailureError(protocolEvidence, errors.New("query Action conflicts with protocol operation"))
+		}
+	}
+	if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 || protocol == ProtocolQuery || protocol == ProtocolEC2Query {
+		if routeErr = validateModeledWireRoute(d.catalog, e.Service, protocol, r.URL.EscapedPath(), r.Method, requestQuery, r.Header.Values("X-Amz-Target")); routeErr != nil {
+			return nil, NewDecodeFailureError(protocolEvidence, routeErr)
+		}
+	} else if protocol != ProtocolRESTJSON && protocol != ProtocolRESTXML {
+		return nil, NewDecodeFailureError(protocolEvidence, errors.New("unsupported AWS protocol"))
+	}
+
+	// Route/target identity is independent of payload parsing. Preserve it only
+	// if the exact catalog record has already validated it.
+	var prevalidated DecodeFailureEvidence
+	if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 {
+		if targets := r.Header.Values("X-Amz-Target"); len(targets) == 1 {
+			if op, targetErr := targetOperationFor(targets[0], e.Service, protocol, d.catalog, d.limits.MaxTokenBytes); targetErr == nil {
+				prevalidated = protocolEvidence
+				prevalidated.Operation, prevalidated.OperationAvailable, prevalidated.OperationCertainty = op, true, EvidenceValidated
+			}
+		}
+	} else if protocol == ProtocolRESTJSON || protocol == ProtocolRESTXML {
+		if op, _, matchErr := restOperationFromCatalog(e.Service, r.URL.EscapedPath(), r.Method, requestQuery, protocol, d.catalog, d.limits); matchErr == nil {
+			prevalidated = protocolEvidence
+			prevalidated.Operation, prevalidated.OperationAvailable, prevalidated.OperationCertainty = op, true, EvidenceValidated
+		}
+	}
 	body, berr := readAndRestore(r, d.limits.MaxBodyBytes)
 	if berr != nil {
-		return nil, berr
+		if prevalidated.HasOperation() {
+			return nil, NewDecodeFailureError(prevalidated, berr)
+		}
+		return nil, NewDecodeFailureError(protocolEvidence, berr)
 	}
-	out = &DecodedAWSRequest{Partition: e.Partition, EndpointHost: e.Host, Service: e.Service, Region: e.Region, CallerAccountID: d.callerAccountID, Protocol: protocol, Method: r.Method, CanonicalPath: r.URL.EscapedPath(), CanonicalQuery: url.Values{}, Headers: safeHeaders(r.Header), Parameters: map[string]Value{}, PayloadHashMode: v.PayloadMode, PayloadBytes: int64(len(body))}
+	out = &DecodedAWSRequest{Partition: e.Partition, EndpointHost: e.Host, Service: e.Service, Region: e.Region, CallerAccountID: d.callerAccountID, Protocol: protocol, Method: r.Method, CanonicalPath: r.URL.EscapedPath(), CanonicalQuery: requestQuery, Headers: safeHeaders(r.Header), Parameters: map[string]Value{}, PayloadHashMode: v.PayloadMode, PayloadBytes: int64(len(body))}
 	if out.CanonicalPath == "" {
 		out.CanonicalPath = "/"
 	}
@@ -214,35 +268,19 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 	case ProtocolJSON10, ProtocolJSON11:
 		out.Operation, out.Parameters, err = decodeJSONBody(body, r.Header, e.Service, protocol, d.catalog, d.limits)
 	case ProtocolQuery, ProtocolEC2Query:
-		var q url.Values
-		q, err = parseQueryString(r.URL.RawQuery, d.limits)
-		if err == nil {
-			out.Operation, out.Parameters, out.CanonicalQuery, err = decodeQueryBody(body, q, e.Service, protocol, d.catalog, d.limits)
-		}
+		out.Operation, out.Parameters, out.CanonicalQuery, err = decodeQueryBody(body, requestQuery, e.Service, protocol, d.catalog, d.limits)
 	case ProtocolRESTJSON:
-		out.Operation, out.Parameters, err = decodeRESTJSONBody(body, e.Service, out.CanonicalPath, out.Method, r.URL.Query(), d.catalog, d.limits)
+		out.Operation, out.Parameters, err = decodeRESTJSONBody(body, e.Service, out.CanonicalPath, out.Method, requestQuery, d.catalog, d.limits)
 	case ProtocolRESTXML:
-		out.Operation, out.Parameters, err = decodeRESTXMLBody(body, e.Service, out.CanonicalPath, out.Method, r.URL.Query(), d.catalog, d.limits)
-	default:
-		err = errors.New("unsupported AWS protocol")
+		out.Operation, out.Parameters, err = decodeRESTXMLBody(body, e.Service, out.CanonicalPath, out.Method, requestQuery, d.catalog, d.limits)
 	}
 	if err != nil {
-		return nil, err
+		return nil, AttachDecodeFailureEvidence(err, protocolEvidence)
 	}
-	if protocol != ProtocolJSON10 && protocol != ProtocolJSON11 && len(r.Header.Values("X-Amz-Target")) > 0 {
-		return nil, errors.New("JSON target is not valid for this protocol")
-	}
-	if protocol != ProtocolQuery && protocol != ProtocolEC2Query {
-		q, qe := parseQueryString(r.URL.RawQuery, d.limits)
-		if qe != nil {
-			return nil, qe
-		}
-		if _, ok := q["Action"]; ok {
-			return nil, errors.New("query Action conflicts with protocol operation")
-		}
-	}
+	operationEvidence := protocolEvidence
+	operationEvidence.Operation, operationEvidence.OperationAvailable, operationEvidence.OperationCertainty = out.Operation, true, EvidenceValidated
 	if err = out.Validate(); err != nil {
-		return nil, fmt.Errorf("decoded request: %w", err)
+		return nil, AttachDecodeFailureEvidence(fmt.Errorf("decoded request: %w", err), operationEvidence)
 	}
 	return out, nil
 }
@@ -386,6 +424,122 @@ func authoritativeProtocolForDefault(service string) (AWSProtocol, bool) {
 	return authoritativeProtocolFor(c, service)
 }
 
+// validateModeledWireRoute checks the request envelope against the raw API
+// model before any target/action or body can establish operation identity.
+// JSON, Query, and EC2 Query models use their modeled HTTP route (normally
+// POST /); REST protocols intentionally use their operation-specific matcher.
+func validateModeledWireRoute(c wireCatalog, service string, protocol AWSProtocol, path, method string, q url.Values, targets []string) error {
+	if c == nil || service == "" || (protocol != ProtocolJSON10 && protocol != ProtocolJSON11 && protocol != ProtocolQuery && protocol != ProtocolEC2Query) {
+		return errors.New("wire route is unavailable")
+	}
+	if path == "" {
+		path = "/"
+	}
+	if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\x00\r\n") {
+		return errors.New("wire route is malformed")
+	}
+	method = strings.ToUpper(method)
+	selectedName, selectedPrefix, selectedVersion := "", "", ""
+	if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 {
+		if len(targets) == 1 {
+			sep := "."
+			if strings.Contains(targets[0], "#") {
+				sep = "#"
+			}
+			parts := strings.Split(targets[0], sep)
+			if len(parts) == 2 {
+				selectedPrefix, selectedName = parts[0], parts[1]
+			}
+		}
+	} else if action, ok := q["Action"]; ok && len(action) == 1 && validOperation(action[0]) {
+		selectedName = action[0]
+		if versions := q["Version"]; len(versions) == 1 {
+			selectedVersion = versions[0]
+		}
+	}
+	matches := 0
+	for _, s := range c.Services() {
+		if s.EndpointPrefix != service {
+			continue
+		}
+		for _, o := range s.Operations {
+			wire, ok := catalogProtocol(s.Protocol, o.Route.JSONVersion)
+			if !ok || wire != protocol {
+				continue
+			}
+			if !validEvidenceService(o.Service) || !validEvidenceOperation(o.Name) || o.Route.Method == "" || o.Route.URI == "" {
+				return errors.New("wire route model is malformed")
+			}
+			routePath, routeQuery, foundQuery := strings.Cut(o.Route.URI, "?")
+			if routePath == "" {
+				routePath = "/"
+			}
+			fixed, queryOK := modeledWireQuery(routeQuery, foundQuery)
+			if !queryOK {
+				return errors.New("wire route model has malformed query placement")
+			}
+			if selectedName != "" && o.Name != selectedName {
+				continue
+			}
+			if selectedPrefix != "" && s.TargetPrefix != selectedPrefix {
+				continue
+			}
+			if selectedVersion != "" && s.APIVersion != selectedVersion {
+				continue
+			}
+			if routePath == path && strings.EqualFold(o.Route.Method, method) && wireQueryMatches(fixed, q, protocol) {
+				matches++
+			}
+		}
+	}
+	if matches == 0 {
+		return errors.New("wire route conflicts with protocol operation")
+	}
+	return nil
+}
+
+func modeledWireQuery(raw string, present bool) (url.Values, bool) {
+	fixed := url.Values{}
+	if !present || raw == "" {
+		return fixed, true
+	}
+	for _, field := range strings.Split(raw, "&") {
+		parts := strings.SplitN(field, "=", 2)
+		key, err := url.QueryUnescape(parts[0])
+		if err != nil || key == "" {
+			return nil, false
+		}
+		value := ""
+		if len(parts) == 2 {
+			value, err = url.QueryUnescape(parts[1])
+			if err != nil {
+				return nil, false
+			}
+		}
+		if _, exists := fixed[key]; exists {
+			return nil, false
+		}
+		fixed[key] = []string{value}
+	}
+	return fixed, true
+}
+
+func wireQueryMatches(fixed, actual url.Values, protocol AWSProtocol) bool {
+	for key, want := range fixed {
+		if got, ok := actual[key]; !ok || !reflect.DeepEqual(got, want) {
+			return false
+		}
+	}
+	if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 {
+		return len(actual) == 0
+	}
+	// Query services allow input members in either the URL query or encoded
+	// body. Only fixed query discriminators from the raw route are required;
+	// the operation's Action/Version and modeled members are validated by the
+	// Query decoder after both placements have been combined.
+	return true
+}
+
 func catalogProtocol(protocol, jsonVersion string) (AWSProtocol, bool) {
 	switch protocol {
 	case "query":
@@ -462,6 +616,25 @@ func safeHeaders(h http.Header) http.Header {
 	return o
 }
 
+func operationHasVariantTarget(c wireCatalog, service, operation, target string) bool {
+	if c == nil {
+		return false
+	}
+	variants := map[string]bool{}
+	for _, s := range c.Services() {
+		if s.EndpointPrefix != service || s.TargetPrefix == target {
+			continue
+		}
+		for _, o := range s.Operations {
+			if o.Service == service && o.Name == operation {
+				variants[s.TargetPrefix] = true
+				break
+			}
+		}
+	}
+	return len(variants) > 0
+}
+
 func targetOperation(target, service string, max int) (string, error) {
 	c, err := iamlivecatalog.Load()
 	if err != nil {
@@ -471,6 +644,9 @@ func targetOperation(target, service string, max int) (string, error) {
 }
 
 func targetOperationFor(target, service string, protocol AWSProtocol, c wireCatalog, max int) (string, error) {
+	if c == nil {
+		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
+	}
 	if len(target) == 0 || len(target) > max || strings.ContainsAny(target, "\x00\r\n") {
 		return "", errors.New("JSON target is malformed")
 	}
@@ -495,9 +671,9 @@ func targetOperationFor(target, service string, protocol AWSProtocol, c wireCata
 			if !ok || (protocol != "" && wire != protocol) {
 				continue
 			}
-			if o.Service == service && o.Name == p[1] && o.Route.TargetPrefix == p[0] {
+			if o.Service == service && o.Name == p[1] && (o.Route.TargetPrefix == p[0] || operationHasVariantTarget(c, service, p[1], p[0])) {
 				matches++
-				if o.State != iamlivecatalog.EvidenceKnown {
+				if o.State != iamlivecatalog.EvidenceKnown && !operationHasVariantTarget(c, service, p[1], p[0]) {
 					return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
 				}
 			}
@@ -517,21 +693,22 @@ func decodeJSONBody(body []byte, h http.Header, service string, protocol AWSProt
 	if e != nil {
 		return "", nil, e
 	}
+	validated := DecodeFailureEvidence{Service: service, Protocol: protocol, ProtocolAvailable: true, ProtocolCertainty: EvidenceAuthoritative, Operation: op, OperationAvailable: true, OperationCertainty: EvidenceValidated}
 	if len(body) == 0 {
-		return "", nil, errors.New("JSON body is empty")
+		return "", nil, NewDecodeFailureError(validated, errors.New("JSON body is empty"))
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
 	v, e := parseJSONValue(dec, 0, l)
 	if e != nil {
-		return "", nil, e
+		return "", nil, NewDecodeFailureError(validated, e)
 	}
 	var x json.Token
 	if e = dec.Decode(&x); e != io.EOF {
-		return "", nil, errors.New("JSON body has trailing data")
+		return "", nil, NewDecodeFailureError(validated, errors.New("JSON body has trailing data"))
 	}
 	if v.Kind != ValueObject {
-		return "", nil, errors.New("JSON body must be an object")
+		return "", nil, NewDecodeFailureError(validated, errors.New("JSON body must be an object"))
 	}
 	return op, v.Object, nil
 }

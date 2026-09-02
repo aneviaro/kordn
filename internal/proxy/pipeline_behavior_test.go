@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -66,6 +67,40 @@ func (p *mutatingPipelinePolicy) Evaluate(context.Context, policy.DecisionInput)
 		p.mapping.Requirements[0].Resources[0] = "changed-after-cache-insert"
 	}
 	return policy.Decision{Result: policy.DecisionDeny, ReasonCode: "policy_no_matching_allow", MatchedRuleIDs: []string{"rule-1"}}
+}
+
+func TestRouteConflictDeniesWithUnknownOperationAndDoesNotForward(t *testing.T) {
+	endpoint, err := awsrequest.DefaultEndpointClassifier.Classify("ecs.us-east-1.amazonaws.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://"+endpoint.Host+"/some/rest/path", strings.NewReader("{} trailing"))
+	req.Host = endpoint.Host
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "AmazonEC2ContainerServiceV20141113.DescribeServices")
+	verified := &awsrequest.VerifiedRequest{Request: req, Endpoint: endpoint, Protocol: awsrequest.ProtocolJSON11, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: endpoint.Region, SigningService: endpoint.Service, PayloadMode: awsrequest.PayloadHashSHA256}
+	collector := &pipelineAuditCollector{}
+	var forwards atomic.Int32
+	server, err := NewServer(Config{
+		Username: testUser, Password: testPassword, RunID: "run-route-conflict", PolicyHash: "sha256:" + strings.Repeat("0", 64),
+		InboundAuthenticator: pipelineAuthenticator{verified: verified}, Decoder: awsrequest.NewDecoder(), Audit: collector,
+		Upstream: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			forwards.Add(1)
+			return nil, errors.New("unexpected forward")
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	response := httptest.NewRecorder()
+	server.handlePipeline(response, req, destination{Host: endpoint.Host, Port: 443}, endpoint)
+	if response.Code != http.StatusForbidden || forwards.Load() != 0 {
+		t.Fatalf("route conflict response=%d forwards=%d", response.Code, forwards.Load())
+	}
+	if len(collector.events) != 1 || collector.events[0].Request.Operation != "Unknown" || collector.events[0].Request.Protocol != awsrequest.ProtocolJSON11 {
+		t.Fatalf("route conflict audit=%+v", collector.events)
+	}
 }
 
 func TestPipelineCachesSuppressCallsCloneValuesAndAuditEveryRequest(t *testing.T) {

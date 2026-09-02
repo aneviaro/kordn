@@ -226,15 +226,15 @@ Files:
 - Modify: `internal/awsrequest/decode_json.go`, `decode_query.go`, `decode_restjson.go`, and `decode_restxml.go` — attach only progressively validated evidence to decode errors; mark malformed/ambiguous operations as unavailable.
 - Modify: `internal/proxy/server.go` — pass the successful decoded request through map/policy failure paths and replace `fallbackDecoded`/`fallbackMapping` with a single evidence-aware local-denial builder.
 - Modify: `internal/awserror/encode_test.go` — assert Query XML remains well formed for catalogued operations and fallback operation tokens.
-- Test: `internal/proxy/proxy_test.go` and `internal/proxy/pipeline_behavior_test.go` — protocol, operation, audit, event-ID, and no-forwarding failure-path coverage.
+- Test: `internal/awsrequest/correction_test.go`, `internal/proxy/proxy_test.go`, and `internal/proxy/pipeline_behavior_test.go` — progressive decode evidence plus protocol, operation, audit, event-ID, and no-forwarding failure-path coverage.
 
 Steps:
-- [ ] Define progressive failure evidence with explicit availability/certainty; never infer an operation from unauthenticated fields or reuse malformed/conflicting values.
-- [ ] For decode failures, select the protocol from mutually consistent verified/authoritative endpoint evidence; use a validated operation only when syntax, endpoint service, protocol, and catalog agree.
-- [ ] For map and policy failures, pass the complete already-validated `DecodedAWSRequest` into denial and audit construction instead of rebuilding it.
-- [ ] Use `Unknown` only when operation evidence is absent, malformed, unknown, or ambiguous; keep the fallback mapping unresolved and non-authorizing.
-- [ ] Make the audit request, denial body, content type, stable reason, and event/request ID derive from the same evidence object.
-- [ ] Use protocol examples different from Tasks 1-3: STS `AssumeRole` (Query XML), ECS `DescribeServices` (JSON 1.1), Lambda `UpdateFunctionConfiguration` (REST-JSON), and S3 `GetBucketLocation` (REST-XML), covering decode, map, and policy failure stages.
+- [x] Define progressive failure evidence with explicit availability/certainty; never infer an operation from unauthenticated fields or reuse malformed/conflicting values.
+- [x] For decode failures, select the protocol from mutually consistent verified/authoritative endpoint evidence; use a validated operation only when syntax, endpoint service, protocol, and catalog agree.
+- [x] For map and policy failures, pass the complete already-validated `DecodedAWSRequest` into denial and audit construction instead of rebuilding it.
+- [x] Use `Unknown` only when operation evidence is absent, malformed, unknown, or ambiguous; keep the fallback mapping unresolved and non-authorizing.
+- [x] Make the audit request, denial body, content type, stable reason, and event/request ID derive from the same evidence object.
+- [x] Use protocol examples different from Tasks 1-3: STS `AssumeRole` (Query XML), ECS `DescribeServices` (JSON 1.1), Lambda `UpdateFunctionConfiguration` (REST-JSON), and S3 `GetBucketLocation` (REST-XML), covering decode, map, and policy failure stages.
 
 Verification:
 - `go test -race ./internal/awsrequest ./internal/awserror ./internal/proxy`
