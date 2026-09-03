@@ -286,3 +286,42 @@ local `kordn run` process, not a separate daemon or network control plane.
   unavailable rather than bypassing authorization.
 - Background-mode logs and audit records contain no credentials or other secret
   material.
+
+## Refactor catalog-backed IAM mapping validation and dependency evaluation
+
+The catalog-backed IAM mapper currently mixes catalog validation, wire lookup,
+mapping-graph evaluation, and request-dependent dependency extraction. It also
+performs repeated catalog scans/copies and uses string-based disagreement checks,
+boolean certainty, and positional bookkeeping that make correctness and
+performance difficult to reason about.
+
+### Desired behavior
+
+- Build an internal, reusable catalog index so request mapping does not clone or
+  scan the complete catalog for every request.
+- Centralize static validation of API models, `map.json`, and IAM definitions at
+  catalog-load time while retaining fail-closed behavior for missing,
+  contradictory, ambiguous, or incomplete evidence.
+- Represent dependent-action occurrences explicitly with tri-state
+  applicability. Preserve duplicate and proven-inapplicable occurrences, and
+  reject unknown applicability rather than guessing.
+- Separate wire resolution, catalog mapping, primary-resource evaluation, and
+  dependency evaluation behind narrow, typed interfaces and safe structured
+  errors.
+- Preserve exact Query/EC2 Query version matching, modeled JSON protocol/target
+  checks, REST route and query-binding checks, and all existing endpoint and
+  non-AWS interception boundaries.
+- Ensure request cancellation stops mapping work instead of leaving timed-out
+  work running in the background.
+
+### Acceptance criteria
+
+- Normal mapping requests use indexed catalog data and avoid repeated full
+  catalog cloning/scanning.
+- Static catalog inconsistencies are detected once with actionable diagnostics;
+  no inconsistent mapping is forwarded or authorized.
+- Dependency validation compares exact action/resource occurrence multisets and
+  retains current conditional-dependency fail-closed semantics.
+- Existing golden, ambiguity, malformed-input, fuzz, timeout, and fail-closed
+  tests continue to pass, with benchmarks covering lookup, mapping, and
+  allocations.
