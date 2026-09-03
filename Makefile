@@ -6,23 +6,54 @@ export GOPROXY := off
 export GOSUMDB := off
 GO_FILES := $(shell find cmd internal test -type f -name '*.go' 2>/dev/null)
 
-.PHONY: all fmt fmt-check lint test test-race license license-check schema schema-check checklist-validation build test-integration compatibility-check test-compatibility strict-compatibility test-external build-matrix benchmark fuzz-smoke strict-performance soak-leak soak-leak-race security-check release-snapshot ci clean
+.PHONY: all iamlive-init iamlive-check fmt fmt-check lint test test-race license license-check schema schema-check checklist-validation build test-integration compatibility-check test-compatibility strict-compatibility test-external build-matrix benchmark fuzz-smoke strict-performance soak-leak soak-leak-race security-check release-snapshot ci clean
 
 all: build
 
-fmt:
+# Initialization is the sole network-capable preparation step. The check target
+# is read-only and all Go gates depend on it so a missing or non-reproducible
+# catalog fails with an actionable init instruction.
+iamlive-init:
+	@./scripts/init-iamlive-submodule.sh
+
+iamlive-check:
+	@set -eu; path=internal/iamlivecatalog/upstream; \
+	test -d "$$path" || { echo 'iamlive catalog absent; run make iamlive-init' >&2; exit 1; }; \
+	./scripts/init-iamlive-submodule.sh --check || { echo 'iamlive catalog is not prepared; run make iamlive-init' >&2; exit 1; }; \
+	test "$$(git -C "$$path" rev-parse HEAD)" = "$$(cat third_party/iamlive/UPSTREAM_COMMIT)" || { echo 'iamlive pin differs from UPSTREAM_COMMIT; run make iamlive-init' >&2; exit 1; }; \
+	for pair in \
+		'd31581bd2e336f59a640f92f386786dea05c2d0930812fe0627b796e49cfc95f LICENSE' \
+		'46898db400fce8eb0a0d43c70d5672582a42c766a5bed5c924a215d56ac11432 NOTICE' \
+		'f6ab658506c1f21875cc8dd3c4a4ed2191c7eb4e6233c36678c841c3e2b330b4 iamlivecore/map.json' \
+		'2ec6e80322edd149eeff984bcbc67736b3d01f7b75e3abc8734a6a84847b855d iamlivecore/iam_definition.json'; do \
+		set -- $$pair; actual=$$( (command -v sha256sum >/dev/null && sha256sum "$$path/$$2" || shasum -a 256 "$$path/$$2") | awk '{print $$1}' ); \
+		test "$$actual" = "$$1" || { echo "selected iamlive hash mismatch: $$2; run make iamlive-init" >&2; exit 1; }; \
+	done; \
+	aggregate=$$(mktemp "$${TMPDIR:-/tmp}/iamlive-catalog.XXXXXX"); trap 'rm -f "$$aggregate"' EXIT; \
+	{ printf 'LICENSE\0'; cat "$$path/LICENSE"; printf 'NOTICE\0'; cat "$$path/NOTICE"; \
+	  printf 'iamlivecore/map.json\0'; cat "$$path/iamlivecore/map.json"; \
+	  printf 'iamlivecore/iam_definition.json\0'; cat "$$path/iamlivecore/iam_definition.json"; \
+	  find "$$path/iamlivecore/apis" -type f -name api-2.json -print | LC_ALL=C sort | while IFS= read -r file; do \
+	    rel=$${file#"$$path/"}; printf 'upstream/%s\0' "$$rel"; cat "$$file"; \
+	  done; \
+	} > "$$aggregate"; \
+	actual=$$( (command -v sha256sum >/dev/null && sha256sum "$$aggregate" || shasum -a 256 "$$aggregate") | awk '{print $$1}' ); \
+	test "$$actual" = '43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869' || { echo 'selected iamlive aggregate hash mismatch: API model or selected data changed; run make iamlive-init' >&2; exit 1; }; \
+	$(GO) test ./internal/iamlivecatalog -count=1
+
+fmt: iamlive-check
 	$(GO) fmt ./...
 
-fmt-check:
+fmt-check: iamlive-check
 	@test -z "$$($(GO)fmt -l $(GO_FILES))" || { echo "gofmt required; run make fmt" >&2; exit 1; }
 
-lint:
+lint: iamlive-check
 	$(GO) vet ./...
 
-test:
+test: iamlive-check
 	$(GO) test ./...
 
-test-race:
+test-race: iamlive-check
 	$(GO) test -race ./...
 
 # Keep schema validation in a named test so the command is deterministic,
@@ -32,7 +63,7 @@ test-race:
 # cross-field body bounds).
 schema: schema-check
 
-schema-check:
+schema-check: iamlive-check
 	$(GO) test ./internal/config -run '^TestSchemaCheck$$' -count=1
 
 checklist-validation:
@@ -49,7 +80,7 @@ checklist-validation:
 # requires a reviewed license and attribution before it can enter the build.
 license: license-check
 
-license-check:
+license-check: iamlive-check
 	@set -eu; \
 	modules="$$($(GO) list -m -f '{{.Path}}@{{.Version}}' all)"; \
 	for module in $$modules; do \
@@ -103,28 +134,28 @@ license-check:
 	grep -q 'go-bsd-3-clause/LICENSE' THIRD_PARTY_NOTICES.md; \
 	echo "license-check: PASS (runtime licenses; AWS SDK/Smithy provenance recorded)"
 
-build:
+build: iamlive-check
 	@mkdir -p $$(dirname $(BINARY))
 	$(GO) build -trimpath -buildvcs=false -o $(BINARY) ./cmd/kordn
 
-test-integration:
+test-integration: iamlive-check
 	$(GO) test -race ./test/integration/...
 
-compatibility-check:
+compatibility-check: iamlive-check
 	$(GO) test -tags compat ./test/compatibility -run '^TestVersionMatrixAndDocumentation$$' -count=1
 
 test-compatibility: compatibility-check
 	$(GO) test -race -tags compat ./test/compatibility
 
-strict-compatibility:
+strict-compatibility: iamlive-check
 	KORDN_STRICT_PERFORMANCE=1 $(GO) test -tags compat ./test/compatibility -run '^TestCompatibilityPerformance$$' -count=1
 
 # External producer tests are deliberately opt-in. Required mode fails closed
 # when an exact binary, provider mirror, or agent producer is absent.
-test-external:
+test-external: iamlive-check
 	KORDN_EXTERNAL_REQUIRED=1 KORDN_EXTERNAL_TESTS=1 $(GO) test -race -tags compat ./test/compatibility
 
-build-matrix:
+build-matrix: iamlive-check
 	@set -eu; for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; out=$$(mktemp -t kordn-build.XXXXXX); \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -o $$out ./cmd/kordn; rm -f $$out; \
@@ -133,13 +164,13 @@ build-matrix:
 # Run the complete benchmark suite by default. Release performance jobs may
 # add their own benchtime/threshold flags, but this target must not hide a
 # benchmark by shortening or selectively filtering it.
-benchmark:
+benchmark: iamlive-check
 	$(GO) test -run '^$$' -bench=. -benchmem ./...
 
 # Exercise every checked-in fuzz target briefly without downloading a corpus.
 # Fuzzing is deterministic and offline when the module cache is already
 # populated, as required by the release gate.
-fuzz-smoke:
+fuzz-smoke: iamlive-check
 	$(GO) test ./internal/sigv4 -run '^$$' -fuzz FuzzCanonicalRequest -fuzztime=2s
 	$(GO) test ./internal/awsrequest -run '^$$' -fuzz FuzzAWSRequestConfiguredDecoder -fuzztime=2s
 	$(GO) test ./internal/proxy -run '^$$' -fuzz FuzzSafeIPClassification -fuzztime=2s
@@ -149,13 +180,13 @@ fuzz-smoke:
 	$(GO) test ./internal/pki -run '^$$' -fuzz FuzzDNSNameValidation -fuzztime=2s
 	$(GO) test ./internal/policy -run '^$$' -fuzz FuzzRuleOrderInvariant -fuzztime=2s
 
-strict-performance:
+strict-performance: iamlive-check
 	KORDN_STRICT_PERFORMANCE=1 $(GO) test ./test/integration -run '^TestStrictPerformance$$' -count=1
 
-soak-leak:
+soak-leak: iamlive-check
 	KORDN_SOAK=1 $(GO) test ./test/integration -run '^TestMixedRequestSoak$$' -count=1
 
-soak-leak-race:
+soak-leak-race: iamlive-check
 	KORDN_SOAK=1 $(GO) test -race ./test/integration -run '^TestMixedRequestSoakRace$$' -count=1
 
 # Static and behavioral release checks. Local security-check may report an
@@ -177,7 +208,7 @@ release-snapshot:
 	test "$${GOPROXY:-off}" = off || { echo 'release-snapshot requires GOPROXY=off for reproducibility' >&2; exit 1; }; \
 	rm -rf dist/release-snapshot .release-snapshot-a .release-snapshot-b; \
 	mkdir -p dist/release-snapshot .release-snapshot-a .release-snapshot-b; \
-	$(MAKE) --no-print-directory GOPROXY=off GOSUMDB=off license-check schema-check; \
+	$(MAKE) --no-print-directory GOPROXY=off GOSUMDB=off iamlive-check license-check schema-check; \
 	for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; name=kordn-$${os}-$${arch}; \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 GOPROXY=off GOSUMDB=off $(GO) build -trimpath -buildvcs=false -ldflags '-s -w -buildid=' -o .release-snapshot-a/$$name ./cmd/kordn; \
@@ -193,17 +224,18 @@ release-snapshot:
 	$(GO) version -m "dist/release-snapshot/$$name" > dist/release-snapshot/BUILD-INFO.txt; \
 	printf '%s' '{"format":"kordn.release.sbom/v1","generator":"go list -m","dependencies":[' > dist/release-snapshot/sbom.json; \
 	$(GO) list -m -f '{"path":"{{.Path}}","version":"{{.Version}}"}' all | awk 'NR > 1 { printf "," } { printf "%s", $$0 } END { print "]}" }' >> dist/release-snapshot/sbom.json; \
-	printf '%s\n' '{"format":"kordn.provenance/v1","build":"offline-reproducible","mapper":"kordn-iammap/v2","authorization_data":"embedded","targets":["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64"]}' > dist/release-snapshot/provenance.json; \
+	printf '%s\n' '{"format":"kordn.provenance/v1","build":"offline-reproducible","upstream_commit":"3ec1a40e560c2f00ec82c50223add810e2567efb","selected_content_sha256":"43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869","catalog_schema":"iamlive-catalog-schema/v2","catalog_version":"iamlive-catalog/v2@3ec1a40e560c2f00ec82c50223add810e2567efb","mapper":"kordn-iammap/v3","adapter":"iamlive-derived/v2@3ec1a40e560c2f00ec82c50223add810e2567efb","authorization_data":"iamlive-catalog/v2@3ec1a40e560c2f00ec82c50223add810e2567efb+sha256:43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869","targets":["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64"]}' > dist/release-snapshot/provenance.json; \
 	printf '%s\n' 'MIT-licensed project; reviewed third-party licenses and attributions are included in release archives.' > dist/release-snapshot/LICENSE-REPORT.txt; \
 	( cd dist/release-snapshot && if command -v sha256sum >/dev/null 2>&1; then sha256sum kordn-* BUILD-INFO.txt LICENSE-REPORT.txt provenance.json sbom.json version.json > SHA256SUMS && sha256sum -c SHA256SUMS; else shasum -a 256 kordn-* BUILD-INFO.txt LICENSE-REPORT.txt provenance.json sbom.json version.json > SHA256SUMS && shasum -a 256 -c SHA256SUMS; fi ); \
 	for file in dist/release-snapshot/kordn-* dist/release-snapshot/SHA256SUMS dist/release-snapshot/BUILD-INFO.txt dist/release-snapshot/LICENSE-REPORT.txt dist/release-snapshot/sbom.json dist/release-snapshot/provenance.json dist/release-snapshot/version.json; do test -s "$$file"; done; \
-	home=$$(mktemp -d "$${TMPDIR:-/tmp}/kordn-home.XXXXXX"); trap 'rm -rf "$$home" .release-snapshot-a .release-snapshot-b' EXIT INT TERM; \
-	HOME="$$home" "dist/release-snapshot/$$name" init >/dev/null; \
+	smoke_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/kordn-release-smoke.XXXXXX"); smoke_bin="$$smoke_dir/kordn"; cp "dist/release-snapshot/$$name" "$$smoke_bin"; \
+	home=$$(mktemp -d "$${TMPDIR:-/tmp}/kordn-home.XXXXXX"); trap 'rm -rf "$$home" "$$smoke_dir" .release-snapshot-a .release-snapshot-b' EXIT INT TERM; \
+	HOME="$$home" "$$smoke_bin" init >/dev/null; \
 	safe_root="$$HOME/.kordn-release-smoke"; safe_audit="$$safe_root/events.jsonl"; \
 	mkdir -p "$$safe_root"; chmod 700 "$$safe_root"; \
 	awk -v path="$$safe_audit" '/^  path: / { print "  path: " path; next } { print }' "$$home/.kordn/config.yaml" > "$$home/.kordn/config.checked.yaml"; chmod 600 "$$home/.kordn/config.checked.yaml"; \
-	HOME="$$home" "dist/release-snapshot/$$name" policy validate --config "$$home/.kordn/config.checked.yaml" >/dev/null; \
-	HOME="$$home" "dist/release-snapshot/$$name" version --json | grep -q '"authorization_data"'; \
+	HOME="$$home" "$$smoke_bin" policy validate --config "$$home/.kordn/config.checked.yaml" >/dev/null; \
+	HOME="$$home" "$$smoke_bin" version --json | grep -q '"upstream_commit"'; \
 	rm -rf "$$safe_root"; \
 	echo 'Kordn offline reproducible snapshot: binaries, checksums, SBOM, provenance, license report, and quickstart PASS'
 

@@ -50,7 +50,12 @@ func TestAuditSchemaCompilesAndValidatesEveryEventType(t *testing.T) {
 	decision.ConnectionID = "connection"
 	decision.Request = &RequestInfo{Host: "sts.amazonaws.com", Partition: "aws", Service: "sts", Operation: "GetCallerIdentity", Region: "us-east-1", Protocol: awsrequest.ProtocolJSON11, Method: "POST", PayloadBytes: 0}
 	decision.IAMRequirements = []Requirement{{Action: "sts:GetCallerIdentity", Resources: []string{"[REDACTED]"}, ScopeKind: awsrequest.ScopeExact}}
-	decision.Mapping = &MappingInfo{Confidence: awsrequest.ConfidenceHigh, MapperVersion: "mapper"}
+	decision.Mapping = &MappingInfo{
+		Confidence:               awsrequest.ConfidenceHigh,
+		MapperVersion:            "kordn-iammap/v3",
+		IamLiveVersion:           "iamlive-derived/v2@3ec1a40e560c2f00ec82c50223add810e2567efb",
+		AuthorizationDataVersion: "iamlive-catalog/v1@3ec1a40e560c2f00ec82c50223add810e2567efb+sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
 	decision.Decision = &DecisionInfo{Result: "allow", ReasonCode: "all_requirements_allowed", MatchedRuleIDs: []string{}, PolicyHash: "sha256:" + strings.Repeat("b", 64)}
 	decision.Timing = &TimingInfo{LocalTotal: 1}
 	fixtures = append(fixtures, decision)

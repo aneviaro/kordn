@@ -8,7 +8,11 @@ Pinned producer versions are in [`test/compatibility/versions.json`](../test/com
 `make test-compatibility` is hermetic and never contacts AWS, downloads
 providers, or runs the long boto loop. The external gate sets
 `KORDN_EXTERNAL_REQUIRED=1`; a missing exact binary, provider mirror, or agent
-is a failure rather than a substitute shim.
+is a failure rather than a substitute shim. Source checkouts must include the
+submodule and run `make iamlive-init` (also supported after a non-recursive
+clone); subsequent checks are offline. GitHub source archives and plain
+`go install` are unsupported inputs. Published binaries are standalone and do
+not need the checkout or submodule.
 
 | Producer / behavior | Hermetic gate | External required gate |
 |---|---|---|
@@ -18,6 +22,11 @@ is a failure rather than a substitute shim.
 | Claude Code and Codex real tool launch | preflight only | Linux amd64, macOS arm64; exact binary, no shim |
 | Corporate authenticated parent relay, reconnect, opaque TLS/chunks | local relay tests | Linux amd64, macOS arm64 |
 | Adversarial auth/lookalike/killed proxy | local relay tests | Linux amd64, macOS arm64 |
+
+The supported producer boundary is still the positive endpoint classifier. IAM
+XML/Query denials remain protocol-native with stable reason/event identifiers;
+unsupported, ambiguous, or unresolved catalog evidence is denied locally and is
+never forwarded upstream.
 
 Performance is a measured release gate, not a compatibility promise. On the
 documented current Darwin amd64 reference machine run

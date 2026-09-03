@@ -303,13 +303,13 @@ Files:
 - Test: `internal/iamlivecatalog/catalog_test.go`, `internal/proxy/pipeline_behavior_test.go`, and `internal/iammap/mapper_test.go` — pin/content/version/cache and varied behavior-contract assertions.
 
 Steps:
-- [ ] Define `make iamlive-init` as the only network-capable preparation step. It initializes the exact gitlink, applies the required sparse checkout, and verifies selected files/license; it never tracks generated output.
-- [ ] Define offline `make iamlive-check` precisely: verify submodule HEAD and `UPSTREAM_COMMIT`, reject an upstream `go.mod` in the sparse worktree, verify selected file hashes/licenses, parse every API model and IAM record, reject duplicate/contradictory indexes, and run catalog consistency tests.
-- [ ] Add behavior contracts over examples not used in Tasks 1-5, such as KMS `ListKeys`, SQS `SendMessage`, SNS `Publish`, and Organizations `ListAccounts`; assert expected protocol/action shape or explicit unresolved rejection rather than broad fallback.
-- [ ] Bump mapper, adapter, and catalog versions; derive the catalog data version from submodule commit plus selected-content hash, and assert mapping/decision cache keys change when that version changes.
-- [ ] Run submodule initialization at the start of each CI job, then keep `iamlive-check`, ordinary tests, and release builds offline. Verify release binaries build twice identically and run without the submodule checkout present.
-- [ ] Document the update procedure: intentionally advance the gitlink, update the pin/provenance/hash, inspect upstream `map.json`/definition/API-model changes, run all contracts, and review any newly resolvable or known-global permissions.
-- [ ] Document source-distribution limitations: after `git clone --recurse-submodules`, run `make iamlive-init` to apply/verify the sparse checkout; `make iamlive-init` also handles a non-recursive clone. GitHub-generated source archives and plain `go install` are not supported build inputs, while published binaries are standalone.
+- [x] Define `make iamlive-init` as the only network-capable preparation step. It initializes the exact gitlink, applies the required sparse checkout, and verifies selected files/license; it never tracks generated output.
+- [x] Define offline `make iamlive-check` precisely: verify submodule HEAD and `UPSTREAM_COMMIT`, reject an upstream `go.mod` in the sparse worktree, verify selected file hashes/licenses, parse every API model and IAM record, reject duplicate/contradictory indexes, and run catalog consistency tests.
+- [x] Add behavior contracts over examples not used in Tasks 1-5, such as KMS `ListKeys`, SQS `SendMessage`, SNS `Publish`, and Organizations `ListAccounts`; assert expected protocol/action shape or explicit unresolved rejection rather than broad fallback.
+- [x] Bump mapper, adapter, and catalog versions; derive the catalog data version from submodule commit plus selected-content hash, and assert mapping/decision cache keys change when that version changes.
+- [x] Run submodule initialization at the start of each CI job, then keep `iamlive-check`, ordinary tests, and release builds offline. Verify release binaries build twice identically and run without the submodule checkout present.
+- [x] Document the update procedure: intentionally advance the gitlink, update the pin/provenance/hash, inspect upstream `map.json`/definition/API-model changes, run all contracts, and review any newly resolvable or known-global permissions.
+- [x] Document source-distribution limitations: after `git clone --recurse-submodules`, run `make iamlive-init` to apply/verify the sparse checkout; `make iamlive-init` also handles a non-recursive clone. GitHub-generated source archives and plain `go install` are not supported build inputs, while published binaries are standalone.
 
 Verification:
 - `make iamlive-init && make iamlive-check`

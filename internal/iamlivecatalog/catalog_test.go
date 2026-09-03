@@ -1,6 +1,10 @@
 package iamlivecatalog
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io/fs"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -70,6 +74,113 @@ func TestPinnedCatalogCoverageAndRepresentativeEvidence(t *testing.T) {
 	if _, err := c.Action("cloudsearch:upload"); err == nil {
 		t.Fatal("missing IAM definition evidence must not become a permission")
 	}
+}
+
+func TestCatalogVariedServiceContracts(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		service, operation, action, protocol string
+		global                               bool
+	}{
+		{"kms", "ListKeys", "kms:ListKeys", "json1.1", true},
+		{"sqs", "SendMessage", "sqs:SendMessage", "json1.0", false},
+		{"sns", "Publish", "sns:Publish", "query", false},
+		{"organizations", "ListAccounts", "organizations:ListAccounts", "json1.1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.service+"/"+tc.operation, func(t *testing.T) {
+			o, err := c.Operation(tc.service, tc.operation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := c.Service(tc.service)
+			if err != nil {
+				t.Fatal(err)
+			}
+			modelProtocol := service.Protocol
+			if strings.HasPrefix(tc.protocol, "json") {
+				modelProtocol += o.Route.JSONVersion
+			}
+			if modelProtocol != tc.protocol {
+				t.Fatalf("wire protocol = %q, want %q", modelProtocol, tc.protocol)
+			}
+			if o.MappingState != EvidenceKnown || len(o.Mappings) != 1 || o.Mappings[0].Action != tc.action {
+				t.Fatalf("mapping evidence = %+v", o)
+			}
+			if o.Route.QueryDiscriminator == "" || o.Route.Method == "" || o.Route.URI == "" {
+				t.Fatalf("wire evidence incomplete: %+v", o.Route)
+			}
+			if tc.global {
+				a, err := c.Action(tc.action)
+				if err != nil || len(a.Resources) != 1 || a.Resources[0].Name != "" {
+					t.Fatalf("global action evidence = %+v (%v)", a, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCatalogSourceHashRejectsAlteredAPIModelContent(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiPaths, err := fs.Glob(embeddedData, "upstream/iamlivecore/apis/*/*/api-2.json")
+	if err != nil || len(apiPaths) == 0 {
+		t.Fatalf("API model set unavailable: %v", err)
+	}
+	sort.Strings(apiPaths)
+	alteredPath := apiPaths[0]
+	original, err := readEmbedded(alteredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered := append([]byte(nil), original...)
+	altered[len(altered)/2] ^= 1
+	contentHash := func(replacement []byte) string {
+		h := sha256.New()
+		for _, item := range []struct {
+			name string
+			data []byte
+		}{
+			{"LICENSE", mustEmbedded(t, "upstream/LICENSE")},
+			{"NOTICE", mustEmbedded(t, "upstream/NOTICE")},
+			{"iamlivecore/map.json", mustEmbedded(t, "upstream/iamlivecore/map.json")},
+			{"iamlivecore/iam_definition.json", mustEmbedded(t, "upstream/iamlivecore/iam_definition.json")},
+		} {
+			h.Write([]byte(item.name))
+			h.Write([]byte{0})
+			h.Write(item.data)
+		}
+		for _, file := range apiPaths {
+			data := mustEmbedded(t, file)
+			if file == alteredPath && replacement != nil {
+				data = replacement
+			}
+			h.Write([]byte(file))
+			h.Write([]byte{0})
+			h.Write(data)
+		}
+		return hex.EncodeToString(h.Sum(nil))
+	}
+	if got := contentHash(nil); got != c.SourceHash() {
+		t.Fatalf("source hash does not match selected bytes: got %s, want %s", c.SourceHash(), got)
+	}
+	if got := contentHash(altered); got == c.SourceHash() {
+		t.Fatal("altered API-model bytes retained the catalog content identity")
+	}
+}
+
+func mustEmbedded(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := readEmbedded(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestCatalogPreservesAbsentAndContradictoryMappingEvidence(t *testing.T) {

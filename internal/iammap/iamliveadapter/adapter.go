@@ -12,8 +12,12 @@ import (
 	"github.com/kordn-ai/kordn/internal/iammap/data"
 )
 
+// UpstreamCommit is the exact iamlive revision consumed by the adapter.
 const UpstreamCommit = iamlivecatalog.UpstreamCommit
-const AdapterVersion = "iamlive-derived/v1@" + UpstreamCommit
+
+// AdapterVersion identifies the request-aware adapter contract and its exact
+// upstream evidence pin.
+const AdapterVersion = "iamlive-derived/v2@" + UpstreamCommit
 
 type Action struct{ Service, Name string }
 type DependencyCandidate struct {

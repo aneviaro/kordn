@@ -2,6 +2,13 @@
 
 ## Initialize and validate
 
+A source checkout must include the pinned sparse iamlive submodule. Clone with
+`--recurse-submodules` and run `make iamlive-init`, or run that target after a
+non-recursive clone. It is the only network-capable preparation step; use
+`GOPROXY=off GOSUMDB=off make iamlive-check` to verify the pin and catalog
+offline. GitHub source archives and plain `go install` are unsupported; a
+published binary is standalone.
+
 Use an isolated home for a smoke test or a dedicated real home for normal use:
 
 ```sh
@@ -48,7 +55,11 @@ a shell. Events are written to the configured private JSONL audit path. Query
 the summary with `kordn audit --json`.
 
 Kordn intercepts only recognized commercial AWS TLS endpoints. Other HTTPS
-traffic remains byte-opaque. It does not install its per-run CA in a system
+traffic remains byte-opaque. Catalog operation/resource evidence is neutral;
+endpoint activation and authorization are separate boundaries. Unsupported,
+ambiguous, or unresolved evidence fails closed without upstream forwarding,
+and IAM Query/XML local denials retain protocol-native responses and stable
+reason/event identifiers. It does not install its per-run CA in a system
 trust store and it does not prevent a same-user program from bypassing proxy
 environment variables, opening direct AWS connections, or reading original
 credential files. These are explicit V0.1 limitations, not containment claims.

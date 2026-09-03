@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -214,6 +215,62 @@ func TestDecisionCacheKeySeparatesAllAuthorizationDimensions(t *testing.T) {
 		if got := server.decisionCacheKey(runID, endpoint, request, mapping); got == base {
 			t.Errorf("%s dimension did not change decision key", name)
 		}
+	}
+}
+
+func TestDecisionAuditCarriesMappingProvenance(t *testing.T) {
+	const commit = "3ec1a40e560c2f00ec82c50223add810e2567efb"
+	const contentHash = "sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	decoded := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
+	mapping := pipelineMapping(decoded.Operation, "arn:aws:iam::123456789012:role/a")
+	mapping.MapperVersion = "kordn-iammap/v3"
+	mapping.IamLiveVersion = "iamlive-derived/v2@" + commit
+	mapping.AuthorizationDataVersion = "iamlive-catalog/v1@" + commit + "+" + contentHash
+
+	event := decisionEvent("run-provenance", "event-provenance", nil, decoded, mapping, policy.Decision{
+		Result: policy.DecisionAllow, ReasonCode: "all_requirements_allowed",
+	}, time.Now().UTC(), "sha256:"+strings.Repeat("a", 64), false, false)
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Mapping map[string]string `json:"mapping"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Mapping["mapper_version"] != mapping.MapperVersion {
+		t.Fatalf("mapper provenance=%q, want %q", payload.Mapping["mapper_version"], mapping.MapperVersion)
+	}
+	if payload.Mapping["iamlive_version"] != mapping.IamLiveVersion {
+		t.Fatalf("iamlive provenance=%q, want %q", payload.Mapping["iamlive_version"], mapping.IamLiveVersion)
+	}
+	if payload.Mapping["authorization_data_version"] != mapping.AuthorizationDataVersion {
+		t.Fatalf("authorization data provenance=%q, want %q", payload.Mapping["authorization_data_version"], mapping.AuthorizationDataVersion)
+	}
+	for name, value := range map[string]string{
+		"upstream commit":       commit,
+		"selected content hash": contentHash,
+	} {
+		if !strings.Contains(payload.Mapping["authorization_data_version"], value) {
+			t.Errorf("%s missing from audit provenance", name)
+		}
+	}
+}
+
+func TestMappingCacheKeyIncludesCatalogProvenance(t *testing.T) {
+	caches, err := cache.NewRunCaches(cache.CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
+	endpoint := pipelineTestEndpoint()
+	server := &Server{config: Config{MapperVersion: "kordn-iammap/v3", AdapterVersion: "iamlive-derived/v2@pin", DataVersion: "iamlive-catalog/v2@pin+sha256:old"}, caches: caches}
+	base := server.mappingCacheKey("run", endpoint, request)
+	server.config.DataVersion = "iamlive-catalog/v2@pin+sha256:new"
+	if got := server.mappingCacheKey("run", endpoint, request); got == base {
+		t.Fatal("catalog content version did not change mapping cache key")
 	}
 }
 
