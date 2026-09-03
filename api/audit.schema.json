@@ -255,6 +255,16 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "iamlive_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "authorization_data_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
         }
       }
     },

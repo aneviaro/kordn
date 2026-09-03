@@ -191,6 +191,18 @@ func RedactResource(resource string, logARNs, hashNames bool) string {
 }
 func MustRedact(v interface{}) string { return fmt.Sprint(RedactStructured(v)) }
 
+var iamliveProvenance = regexp.MustCompile(`^iamlive-(?:derived|catalog)/v[0-9]+@[0-9a-f]{40}(?:\+sha256:[0-9a-f]{64})?$`)
+
+func redactProvenance(value string) string {
+	// Commit and content hashes are authorization provenance, not credentials.
+	// Preserve their exact identity while still applying the normal scanner to
+	// malformed or untrusted version values.
+	if iamliveProvenance.MatchString(value) {
+		return value
+	}
+	return RedactString(value)
+}
+
 func redactEvent(e Event) Event {
 	out := cloneEvent(e)
 	out.SchemaVersion = RedactString(out.SchemaVersion)
@@ -217,6 +229,8 @@ func redactEvent(e Event) Event {
 	}
 	if out.Mapping != nil {
 		out.Mapping.MapperVersion = RedactString(out.Mapping.MapperVersion)
+		out.Mapping.IamLiveVersion = redactProvenance(out.Mapping.IamLiveVersion)
+		out.Mapping.AuthorizationDataVersion = redactProvenance(out.Mapping.AuthorizationDataVersion)
 	}
 	if out.Decision != nil {
 		out.Decision.Result = RedactString(out.Decision.Result)

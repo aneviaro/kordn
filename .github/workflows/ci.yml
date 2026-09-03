@@ -31,6 +31,8 @@ jobs:
       GOARCH: amd64
     steps:
       - uses: actions/checkout@v4
+      - name: Initialize pinned iamlive catalog
+        run: make iamlive-init
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -70,6 +72,8 @@ jobs:
       KORDN_AGENT: claude
     steps:
       - uses: actions/checkout@v4
+      - name: Initialize pinned iamlive catalog
+        run: make iamlive-init
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}

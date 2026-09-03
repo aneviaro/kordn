@@ -17,7 +17,10 @@ import (
 	"sync"
 )
 
-const catalogVersion = "iamlive-catalog/v1@" + UpstreamCommit
+// CatalogVersion identifies the parsed catalog implementation and upstream
+// gitlink revision. The selected-content digest is exposed by Catalog.SourceHash.
+const CatalogVersion = "iamlive-catalog/v2@" + UpstreamCommit
+const catalogVersion = CatalogVersion
 const maxJSONBytes = 64 << 20
 
 var (
@@ -34,6 +37,18 @@ func Load() (*Catalog, error) {
 }
 func Default() (*Catalog, error) { return Load() }
 func Version() string            { return catalogVersion }
+
+// SchemaVersion returns the neutral catalog schema implementation version.
+func SchemaVersion() string { return CatalogSchemaVersion }
+
+// SchemaVersion returns the neutral catalog representation contract used by
+// this catalog, independent of the upstream map schema.
+func (c *Catalog) SchemaVersion() string {
+	if c == nil {
+		return ""
+	}
+	return CatalogSchemaVersion
+}
 
 func (c *Catalog) Version() string {
 	if c == nil {

@@ -74,8 +74,10 @@ type Requirement struct {
 	Dependent bool                 `json:"dependent"`
 }
 type MappingInfo struct {
-	Confidence    awsrequest.MappingConfidence `json:"confidence"`
-	MapperVersion string                       `json:"mapper_version"`
+	Confidence               awsrequest.MappingConfidence `json:"confidence"`
+	MapperVersion            string                       `json:"mapper_version"`
+	IamLiveVersion           string                       `json:"iamlive_version,omitempty"`
+	AuthorizationDataVersion string                       `json:"authorization_data_version,omitempty"`
 }
 type DecisionInfo struct {
 	Result         string   `json:"result"`

@@ -28,12 +28,17 @@ endpoint classification and SSRF checks are owned by `internal/proxy`.
 
 ## Package and legal boundary
 
-Original code is MIT-licensed. The only permitted direct iamlive integration
-boundary is `internal/iammap/iamliveadapter`; Kordn-specific authentication,
-policy, forwarding, credential isolation, and audit remain outside it. Task 1
-records the evaluated upstream revision and selected minimal attributed
-mapper-data/logic derivation in ADR 0001 without copying source or adding a
-runtime dependency. No source from unlicensed `iam-agent-proxy` is used.
+Original code is MIT-licensed. The pinned iamlive gitlink at
+`internal/iamlivecatalog/upstream` is sparse-selected and embedded as a neutral
+catalog. `make iamlive-init` prepares it and `make iamlive-check` verifies it
+offline; no runtime network fetch occurs. The only direct adapter boundary is
+`internal/iammap/iamliveadapter`; Kordn-specific endpoint activation,
+authentication, policy, forwarding, credential isolation, and audit remain
+outside it. The catalog retains unresolved evidence rather than widening it to
+`*`; unknown or ambiguous mapping fails closed without forwarding. IAM Query
+`ListUsers` is decoded as `iam:ListUsers` with known-global semantics, and
+local IAM XML denials preserve protocol-native responses and audit operation
+identity. No source from unlicensed `iam-agent-proxy` is used.
 
 ## Startup invariant
 

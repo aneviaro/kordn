@@ -15,12 +15,13 @@ by module.
 Kordn uses the iamlive revision recorded in
 `third_party/iamlive/UPSTREAM_COMMIT`. iamlive is MIT-licensed by Ian Mckay.
 The exact MIT text is retained at `third_party/iamlive/LICENSE`, and the
-upstream dependency notice is retained at `third_party/iamlive/NOTICE`. Only
-the minimal derived operation/action and dependent-action mapper under
-`third_party/iamlive/source/` is included. Its explicit operation table is
-narrowed to Kordn's reviewed support matrix, and its typed request-value
-adaptation and fail-closed cross-checks are Kordn-specific; exact upstream
-revision, path, symbols, and derivation are recorded in
+upstream dependency notice is retained at `third_party/iamlive/NOTICE`. The
+selected sparse gitlink data paths are `LICENSE`, `NOTICE`,
+`iamlivecore/map.json`, `iamlivecore/iam_definition.json`, and
+`iamlivecore/apis/**/api-2.json`. Kordn's neutral parser and typed request-value
+adaptation preserve the full selected catalog; endpoint activation,
+authorization, and fail-closed checks remain Kordn-specific. Exact upstream
+revision and selected-content hashes are recorded in
 `third_party/iamlive/PROVENANCE.md`. No upstream runtime, proxy, or credential
 code is included.
 
@@ -50,8 +51,7 @@ texts, SHA256 checksums, a CycloneDX JSON SBOM, Cosign keyless signature, and
 GitHub build provenance. The mapper integration is the embedded attributed
 adapter based on iamlive commit
 `3ec1a40e560c2f00ec82c50223add810e2567efb`, resolved 2026-08-18, with MIT text
-and upstream notice retained. AWS authorization data is the embedded snapshot
-`aws-sar-nine-service-2026-08-27`, retrieved 2026-08-27 from the exact
-service-list and mapping URLs recorded in
-`internal/iammap/data/source/manifest.json`; its generated files and hashes
-are checked by mapper golden and widening tests.
+and upstream notice retained. The authorization data version combines that commit and selected-content
+SHA-256; it is exposed separately from catalog schema, mapper, and adapter
+versions in `kordn version --json`. No copied AWS operation dataset or full
+widening baseline is stored in Kordn.

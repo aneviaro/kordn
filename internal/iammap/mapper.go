@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-const MapperVersion = "kordn-iammap/v2"
+// MapperVersion identifies Kordn's enforcement mapper contract. The selected
+// authorization data is carried separately by AuthorizationDataVersion.
+const MapperVersion = "kordn-iammap/v3"
 
 type MapperOptions struct {
 	Timeout    time.Duration

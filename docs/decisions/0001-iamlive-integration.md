@@ -1,6 +1,6 @@
 # ADR 0001: iamlive integration boundary
 
-- **Status:** accepted for Task 1; mapper implementation deferred to Task 6
+- **Status:** accepted; Task 6 integration complete
 - **Date:** 2026-08-18
 - **Decision:** minimal, attributed derivation of the mapper data/logic needed by
   Kordn, isolated behind `internal/iammap/iamliveadapter`; do not import the
@@ -36,17 +36,20 @@ fail-closed mapper error boundary through a clean import.
 
 ## Consequences and implementation boundary
 
-Task 6 may derive only the smallest required mapping data/logic from the pinned
-MIT iamlive revision and must preserve `third_party/iamlive/LICENSE` and
+Task 6 derives only the neutral catalog data needed from the pinned MIT iamlive
+revision and must preserve `third_party/iamlive/LICENSE` and
 `NOTICE`, record provenance for substantially derived files in
 `third_party/iamlive/PROVENANCE.md`, and keep all Kordn authorization and fail-closed code outside
 `internal/iammap/iamliveadapter`. Independently sourced AWS authorization data
 will retain its own source and version.
 
-The adapter must expose mapper/data versions, convert incomplete extraction to
-`unresolved` rather than `*`, and contain panics/timeouts. A golden regression
+The adapter exposes mapper/data versions, with the catalog commit and
+selected-content hash included in the data version. It converts incomplete extraction to
+`unresolved` rather than `*`, and contains panics/timeouts. A golden regression
 suite will compare representative exact/set/known-global/unresolved mappings.
 Any update that turns unresolved scope or a dependent action into an allowable
 wildcard is a release-blocking widening change and requires an ADR/test review.
-The `make license-check` gate and CI must remain green before mapper changes
-land.
+The `make iamlive-init` target is the sole network-capable preparation step;
+`make iamlive-check` and all subsequent Go gates are offline. CI initializes the
+sparse submodule immediately after checkout. The `make license-check` gate and
+CI must remain green before mapper changes land.

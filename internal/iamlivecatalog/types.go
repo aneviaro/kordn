@@ -4,7 +4,12 @@ package iamlivecatalog
 
 import "encoding/json"
 
+// UpstreamCommit is the exact iamlive gitlink revision used by this catalog.
 const UpstreamCommit = "3ec1a40e560c2f00ec82c50223add810e2567efb"
+
+// CatalogSchemaVersion identifies Kordn's parser/index contract. It changes
+// when the neutral catalog representation or validation semantics change.
+const CatalogSchemaVersion = "iamlive-catalog-schema/v2"
 
 // EvidenceState makes absent and contradictory upstream evidence observable to
 // consumers instead of silently manufacturing a wildcard or a default.

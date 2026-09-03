@@ -9,7 +9,80 @@ import (
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
 	"github.com/kordn-ai/kordn/internal/iammap/data"
+	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 )
+
+func TestVariedWireToMappingContracts(t *testing.T) {
+	cases := []struct {
+		name, authority, target, query, body, operation, action string
+		protocol                                                awsrequest.AWSProtocol
+		unresolved                                              bool
+		scope                                                   awsrequest.ScopeKind
+	}{
+		{"kms", "kms.us-east-1.amazonaws.com", "TrentService.ListKeys", "", `{}`, "ListKeys", "kms:ListKeys", awsrequest.ProtocolJSON11, false, awsrequest.ScopeKnownGlobal},
+		{"sqs", "sqs.us-east-1.amazonaws.com", "AmazonSQS.SendMessage", "", `{"QueueUrl":"https://sqs.us-east-1.amazonaws.com/123456789012/orders","MessageBody":"hello"}`, "SendMessage", "sqs:SendMessage", awsrequest.ProtocolJSON10, true, awsrequest.ScopeUnresolved},
+		{"sns", "sns.us-east-1.amazonaws.com", "", "Action=Publish&Version=2010-03-31&TopicArn=arn%3Aaws%3Asns%3Aus-east-1%3A123456789012%3Aorders&Message=hello", "", "Publish", "sns:Publish", awsrequest.ProtocolQuery, true, awsrequest.ScopeUnresolved},
+		{"organizations", "organizations.us-east-1.amazonaws.com", "AWSOrganizationsV20161128.ListAccounts", "", `{}`, "ListAccounts", "organizations:ListAccounts", awsrequest.ProtocolJSON11, false, awsrequest.ScopeKnownGlobal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ep, err := awsrequest.DefaultEndpointClassifier.Classify(tc.authority)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := http.NewRequest("POST", "https://"+tc.authority+"/", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Host = ep.Host
+			r.URL.RawQuery = tc.query
+			if tc.protocol == awsrequest.ProtocolQuery {
+				r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			} else if tc.protocol == awsrequest.ProtocolJSON10 {
+				r.Header.Set("Content-Type", "application/x-amz-json-1.0")
+			} else {
+				r.Header.Set("Content-Type", "application/x-amz-json-1.1")
+			}
+			if tc.target != "" {
+				r.Header.Set("X-Amz-Target", tc.target)
+			}
+			region := ep.Region
+			if region == "" {
+				region = "us-east-1"
+			}
+			verified := &awsrequest.VerifiedRequest{Request: r, Endpoint: ep, Protocol: tc.protocol, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: region, SigningService: ep.Service, PayloadMode: awsrequest.PayloadHashSHA256}
+			decoder, err := awsrequest.NewConfiguredDecoder(awsrequest.DecoderOptions{CallerAccountID: "123456789012"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decoder.Decode(context.Background(), verified, ep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Protocol != tc.protocol || decoded.Operation != tc.operation {
+				t.Fatalf("decoded wire identity = protocol %q operation %q, want %q %q", decoded.Protocol, decoded.Operation, tc.protocol, tc.operation)
+			}
+			m, err := NewMapper()
+			if err != nil {
+				t.Fatal(err)
+			}
+			mapped, err := m.Map(context.Background(), decoded)
+			if tc.unresolved {
+				if err == nil || mapped != nil || !strings.Contains(err.Error(), "resource") {
+					t.Fatalf("unresolved resource was accepted: result=%+v err=%v", mapped, err)
+				}
+				return
+			}
+			if err != nil || mapped == nil || len(mapped.Requirements) != 1 {
+				t.Fatalf("mapping = %+v, err = %v", mapped, err)
+			}
+			got := mapped.Requirements[0]
+			if got.Action != tc.action || got.ScopeKind != tc.scope || len(got.Resources) != 1 || got.Resources[0] != "*" {
+				t.Fatalf("requirement = %+v, want action %q scope %q global resource", got, tc.action, tc.scope)
+			}
+		})
+	}
+}
 
 func TestWireToMappingGoldens(t *testing.T) {
 	cases := []struct{ name, authority, protocol, target, method, path, query, body, operation, action, resource string }{
@@ -84,7 +157,7 @@ func TestWireToMappingGoldens(t *testing.T) {
 			if !reflect.DeepEqual(got.Requirements, wantRequirements) {
 				t.Fatalf("requirements=%+v, want=%+v", got.Requirements, wantRequirements)
 			}
-			if got.MapperVersion != MapperVersion || got.IamLiveVersion != "iamlive-derived/v1@3ec1a40e560c2f00ec82c50223add810e2567efb" || got.AuthorizationDataVersion != data.AuthorizationDataVersion() {
+			if got.MapperVersion != MapperVersion || got.IamLiveVersion != iamliveadapter.AdapterVersion || got.AuthorizationDataVersion != data.AuthorizationDataVersion() {
 				t.Fatalf("incomplete or unexpected provenance: %+v", got)
 			}
 		})

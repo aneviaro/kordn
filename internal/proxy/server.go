@@ -1304,7 +1304,12 @@ func decisionEvent(run, id string, req *http.Request, decoded *awsrequest.Decode
 	// composition root can choose visible ARNs or run-scoped hashes; the
 	// default is redaction.
 	e.IAMRequirements = audit.RequirementsForRun(run, m.Requirements, logResourceARNs, hashResourceNames)
-	e.Mapping = &audit.MappingInfo{Confidence: m.Confidence, MapperVersion: m.MapperVersion}
+	e.Mapping = &audit.MappingInfo{
+		Confidence:               m.Confidence,
+		MapperVersion:            m.MapperVersion,
+		IamLiveVersion:           m.IamLiveVersion,
+		AuthorizationDataVersion: m.AuthorizationDataVersion,
+	}
 	e.Decision = &audit.DecisionInfo{Result: string(d.Result), ReasonCode: string(d.ReasonCode), MatchedRuleIDs: append([]string(nil), d.MatchedRuleIDs...), PolicyHash: validPolicyHash(policyHash)}
 	e.Timing = &audit.TimingInfo{LocalTotal: float64(time.Since(start)) / float64(time.Millisecond)}
 	return e

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,15 @@ func goldenRequest(service, host, region, op string, p map[string]awsrequest.Val
 		query["Version"] = []string{"2010-08-01"}
 	case "dynamodb":
 		headers["X-Amz-Target"] = []string{"DynamoDB_20120810." + op}
+	case "kms":
+		headers["X-Amz-Target"] = []string{"TrentService." + op}
+	case "organizations":
+		headers["X-Amz-Target"] = []string{"AWSOrganizationsV20161128." + op}
+	case "sqs":
+		headers["X-Amz-Target"] = []string{"AmazonSQS." + op}
+	case "sns":
+		query["Action"] = []string{op}
+		query["Version"] = []string{"2010-03-31"}
 	case "ecs":
 		headers["X-Amz-Target"] = []string{"AmazonEC2ContainerServiceV20141113." + op}
 	case "logs":
@@ -73,6 +83,44 @@ func TestGoldenMappings(t *testing.T) {
 		})
 	}
 }
+func TestVariedCatalogMappingsAndUnresolvedScopes(t *testing.T) {
+	m, err := NewMapper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		service, host, region, operation, action string
+		parameters                               map[string]awsrequest.Value
+		wantScope                                awsrequest.ScopeKind
+		wantError                                bool
+	}{
+		{"kms", "kms.us-east-1.amazonaws.com", "us-east-1", "ListKeys", "kms:ListKeys", nil, awsrequest.ScopeKnownGlobal, false},
+		{"organizations", "organizations.us-east-1.amazonaws.com", "us-east-1", "ListAccounts", "organizations:ListAccounts", nil, awsrequest.ScopeKnownGlobal, false},
+		// These records are recognized exactly, but their upstream resource
+		// templates are not enough for the current enforcement ARN builders.
+		// They must remain unresolved rather than becoming a wildcard.
+		{"sqs", "sqs.us-east-1.amazonaws.com", "us-east-1", "SendMessage", "sqs:SendMessage", map[string]awsrequest.Value{"QueueUrl": str("https://sqs.us-east-1.amazonaws.com/123456789012/orders")}, awsrequest.ScopeUnresolved, true},
+		{"sns", "sns.us-east-1.amazonaws.com", "us-east-1", "Publish", "sns:Publish", map[string]awsrequest.Value{"TopicArn": str("arn:aws:sns:us-east-1:123456789012:orders")}, awsrequest.ScopeUnresolved, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.service+"/"+tc.operation, func(t *testing.T) {
+			r, err := m.Map(context.Background(), goldenRequest(tc.service, tc.host, tc.region, tc.operation, tc.parameters))
+			if tc.wantError {
+				if err == nil || r != nil || !strings.Contains(err.Error(), "resource") {
+					t.Fatalf("unresolved mapping was accepted: result=%+v err=%v", r, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(r.Requirements) != 1 || r.Requirements[0].Action != tc.action || r.Requirements[0].ScopeKind != tc.wantScope {
+				t.Fatalf("mapping=%+v", r)
+			}
+		})
+	}
+}
+
 func TestAssumeRoleUsesCrossAccountRoleARN(t *testing.T) {
 	m, e := NewMapper()
 	if e != nil {

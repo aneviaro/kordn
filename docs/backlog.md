@@ -1,13 +1,19 @@
 # Future improvements
 
-## Remove the intentionally limited AWS operation matrix
+## Remove the intentionally limited AWS operation matrix — complete
 
-Kordn currently uses an intentionally narrow operation matrix. For IAM, the
+The pinned sparse iamlive catalog now supplies complete modeled operation and
+IAM mapping evidence. Runtime interception remains bounded by the positive
+endpoint classifier, and unsupported or unresolved evidence fails closed.
+
+Historical context: Kordn previously used an intentionally narrow operation
+matrix. For IAM, the
 request decoder recognizes only a small subset of operations (`GetRole`,
 `CreateRole`, and `PassRole`), even though the pinned AWS service metadata and
 IAM authorization data contain many more operations, including `ListUsers`.
 
-As a result, this valid command is rejected before policy evaluation:
+The original implementation rejected this valid command before policy
+evaluation:
 
 ```text
 aws iam list-users
@@ -26,9 +32,9 @@ The current behavior is:
 `kordn policy validate` only validates the configuration and policy hash. It
 does not validate that every AWS operation is supported or allowed.
 
-### Desired change
+### Delivered change
 
-Remove the intentional limited operation matrix. Operation recognition and IAM
+The intentional limited operation matrix was removed. Operation recognition and IAM
 mapping should be generated from the complete pinned AWS/iamlive-derived
 metadata rather than from a hand-maintained nine-service subset. This should
 include:

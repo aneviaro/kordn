@@ -10,6 +10,8 @@ import (
 	"github.com/kordn-ai/kordn/internal/audit"
 	"github.com/kordn-ai/kordn/internal/config"
 	"github.com/kordn-ai/kordn/internal/credentials"
+	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
+	"github.com/kordn-ai/kordn/internal/iammap"
 	"github.com/kordn-ai/kordn/internal/iammap/data"
 	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 	"io"
@@ -449,6 +451,12 @@ type versionInfo struct {
 	Mapper             string              `json:"mapper"`
 	IamLive            string              `json:"iamlive"`
 	AuthorizationData  string              `json:"authorization_data"`
+	UpstreamCommit     string              `json:"upstream_commit"`
+	SelectedContentSHA string              `json:"selected_content_sha256"`
+	CatalogSchema      string              `json:"catalog_schema"`
+	CatalogVersion     string              `json:"catalog_version"`
+	MapperVersion      string              `json:"mapper_version"`
+	AdapterVersion     string              `json:"adapter_version"`
 	DirectDependencies []versionDependency `json:"direct_dependencies"`
 }
 
@@ -456,8 +464,15 @@ func buildVersionInfo() versionInfo {
 	info := versionInfo{
 		Binary: "kordn", Version: "0.1.0", Target: runtime.GOOS + "/" + runtime.GOARCH,
 		Go: runtime.Version(), Config: "kordn.dev/v1alpha1", Audit: audit.SchemaVersion,
-		Mapper: "kordn-iammap/v2", IamLive: iamliveadapter.AdapterVersion,
-		AuthorizationData: data.AuthorizationDataVersion(), DirectDependencies: directDependencies(),
+		Mapper: iammap.MapperVersion, IamLive: iamliveadapter.AdapterVersion,
+		AuthorizationData: data.AuthorizationDataVersion(), UpstreamCommit: iamlivecatalog.UpstreamCommit,
+		CatalogSchema: iamlivecatalog.CatalogSchemaVersion, MapperVersion: iammap.MapperVersion,
+		AdapterVersion: iamliveadapter.AdapterVersion, DirectDependencies: directDependencies(),
+		CatalogVersion: iamlivecatalog.Version(),
+	}
+	if catalog, err := iamlivecatalog.Load(); err == nil {
+		info.SelectedContentSHA = catalog.SourceHash()
+		info.CatalogVersion = catalog.Version()
 	}
 	if build, ok := debug.ReadBuildInfo(); ok {
 		if build.Main.Version != "" && build.Main.Version != "(devel)" {
