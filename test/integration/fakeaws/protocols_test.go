@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"io"
 	"net"
@@ -45,6 +46,7 @@ func TestProtocolAndIndependentSignatureTable(t *testing.T) {
 		want                            Protocol
 	}{
 		{"json10", "application/x-amz-json-1.0", "AmazonDynamoDBv2.Json10.GetItem", `{"TableName":"fixture"}`, JSON10},
+		{"json10-dynamodb-target", "application/x-amz-json-1.0", "DynamoDB_20120810.GetItem", `{"TableName":"fixture"}`, JSON10},
 		{"json11", "application/x-amz-json-1.1", "AmazonDynamoDBv2.GetItem", `{"TableName":"fixture"}`, JSON11},
 		{"query", "application/x-www-form-urlencoded", "", "Action=GetItem&Version=2011-06-15", Query},
 		{"ec2-query", "application/x-www-form-urlencoded", "", "Action=DescribeInstances&Version=2016-11-15", EC2Query},
@@ -119,6 +121,51 @@ func signedFixtureRequestResult(server *Server, creds aws.Credentials, signingTi
 	response, err := client.Do(req)
 	transport.CloseIdleConnections()
 	return response, err
+}
+
+func TestCatalogResponsesAreProtocolNative(t *testing.T) {
+	cases := []struct {
+		name      string
+		service   string
+		operation string
+		protocol  Protocol
+		status    int
+		content   string
+	}{
+		{name: "iam-query", service: "iam", operation: "ListUsers", protocol: Query, status: http.StatusOK, content: "text/xml"},
+		{name: "s3-rest-xml", service: "s3", operation: "GetObject", protocol: RESTXML, status: http.StatusOK, content: "application/octet-stream"},
+		{name: "lambda-rest-json", service: "lambda", operation: "CreateFunction", protocol: RESTJSON, status: http.StatusCreated, content: "application/json"},
+		{name: "dynamodb-json-1.0", service: "dynamodb", operation: "BatchExecuteStatement", protocol: JSON10, status: http.StatusOK, content: "application/x-amz-json-1.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response := CatalogResponse(tc.service, tc.operation, tc.protocol, "catalog-request-id")
+			if response.Status != tc.status {
+				t.Fatalf("CatalogResponse(%q, %q, %q) status = %d, want %d", tc.service, tc.operation, tc.protocol, response.Status, tc.status)
+			}
+			if got := response.Headers.Get("Content-Type"); got != tc.content {
+				t.Fatalf("CatalogResponse(%q, %q, %q) Content-Type = %q, want %q", tc.service, tc.operation, tc.protocol, got, tc.content)
+			}
+			switch tc.protocol {
+			case Query:
+				var document struct {
+					RequestID string `xml:"ResponseMetadata>RequestId"`
+				}
+				if err := xml.Unmarshal(response.Body, &document); err != nil || document.RequestID != "catalog-request-id" {
+					t.Fatalf("CatalogResponse(%q, %q, %q) XML = %q, request ID = %q, error = %v", tc.service, tc.operation, tc.protocol, response.Body, document.RequestID, err)
+				}
+			case JSON10, RESTJSON:
+				var document map[string]any
+				if err := json.Unmarshal(response.Body, &document); err != nil {
+					t.Fatalf("CatalogResponse(%q, %q, %q) JSON = %q, error = %v", tc.service, tc.operation, tc.protocol, response.Body, err)
+				}
+			case RESTXML:
+				if string(response.Body) != "fixture object" {
+					t.Fatalf("CatalogResponse(%q, %q, %q) body = %q, want fixture object", tc.service, tc.operation, tc.protocol, response.Body)
+				}
+			}
+		})
+	}
 }
 
 func TestQueryFixtureXMLIsWellFormed(t *testing.T) {

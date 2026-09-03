@@ -612,6 +612,74 @@ func (r *latencyBody) Read(p []byte) (int, error) {
 	return copy(p, r.data), nil
 }
 
+func TestProxy_PipelineRejectsUnknownAndAmbiguousWithoutUpstream(t *testing.T) {
+	cases := []struct {
+		name, host, service string
+		protocol            awsrequest.AWSProtocol
+	}{
+		{"query-unknown", "iam.amazonaws.com", "iam", awsrequest.ProtocolQuery},
+		{"rest-xml-ambiguous", "s3.us-east-1.amazonaws.com", "s3", awsrequest.ProtocolRESTXML},
+		{"rest-json-unknown", "lambda.us-east-1.amazonaws.com", "lambda", awsrequest.ProtocolRESTJSON},
+		{"json-ambiguous", "dynamodb.us-east-1.amazonaws.com", "dynamodb", awsrequest.ProtocolJSON10},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint := awsrequest.AWSEndpoint{Partition: "aws", Host: tc.host, Service: tc.service, Region: "us-east-1"}
+			if tc.service == "iam" {
+				endpoint.Region, endpoint.Global = "", true
+			}
+			req := httptest.NewRequest(http.MethodPost, "https://"+tc.host+"/", strings.NewReader("evidence must not be forwarded"))
+			req.Host = tc.host
+			verified := &awsrequest.VerifiedRequest{Request: req, Endpoint: endpoint, Protocol: tc.protocol, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: "us-east-1", SigningService: tc.service, PayloadMode: awsrequest.PayloadHashSHA256}
+			collector := &pipelineAuditCollector{}
+			var upstreamCalls atomic.Int32
+			server, err := NewServer(Config{Username: testUser, Password: testPassword, RunID: "run-fail-closed", InboundAuthenticator: pipelineAuthenticator{verified: verified}, Decoder: failingPipelineDecoder{err: errors.New("ambiguous operation evidence")}, Audit: collector, Upstream: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				upstreamCalls.Add(1)
+				return nil, errors.New("must not forward")
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			response := httptest.NewRecorder()
+			server.handlePipeline(response, req, destination{Host: tc.host, Port: 443}, endpoint)
+			if response.Code != http.StatusForbidden || upstreamCalls.Load() != 0 {
+				t.Fatalf("%s response=%d upstream calls=%d", tc.name, response.Code, upstreamCalls.Load())
+			}
+			if len(collector.events) != 1 || collector.events[0].EventType != audit.RequestDecision || collector.events[0].Request.Operation != "Unknown" {
+				t.Fatalf("%s audit=%+v want one correlated Unknown decision", tc.name, collector.events)
+			}
+		})
+	}
+}
+
+func TestMapReasonPreservesSpecificMappingFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "dependent evidence wrapped as operation lookup", err: errors.New("unknown operation lambda:CreateFunction: missing dependent action mapping lambda:createfunction -> lambda:passcapacityprovider"), want: "dependent_permission_unresolved"},
+		{name: "unresolved applicability has no primary action", err: errors.New("unknown operation dynamodb:BatchExecuteStatement: mapping has no primary action"), want: "resource_unresolved"},
+		{name: "unknown operation", err: errors.New("unknown operation iam:NotInCatalog"), want: "unknown_operation"},
+		{name: "unknown operation containing dependent", err: errors.New("unknown operation iam:DependentThing"), want: "unknown_operation"},
+		{name: "unresolved resource", err: errors.New("unresolved primary resource"), want: "resource_unresolved"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mapReason(tc.err); got != tc.want {
+				t.Fatalf("mapReason(%q) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type failingPipelineDecoder struct{ err error }
+
+func (d failingPipelineDecoder) Decode(context.Context, *awsrequest.VerifiedRequest, awsrequest.AWSEndpoint) (*awsrequest.DecodedAWSRequest, error) {
+	return nil, d.err
+}
+
 func TestProxy_PipelineDeniesBeforeResignOrForwardAndAudits(t *testing.T) {
 	const host = "sts.amazonaws.com"
 	endpoint := awsrequest.AWSEndpoint{Partition: "aws", Host: host, Service: "sts", Region: "us-east-1", Scope: awsrequest.ScopeRegional}
