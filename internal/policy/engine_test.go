@@ -275,6 +275,67 @@ func TestEngineAllSmallPermutations(t *testing.T) {
 	}
 }
 
+func TestEngineCatalogOperationScopesAndConjunction(t *testing.T) {
+	iam := awsrequest.AWSEndpoint{Partition: "aws", Host: "iam.amazonaws.com", Service: "iam", Global: true}
+	global := awsrequest.MappingResult{Service: "iam", Operation: "ListUsers", MapperVersion: "catalog", Confidence: awsrequest.ConfidenceHigh, Requirements: []awsrequest.IAMRequirement{{Action: "iam:ListUsers", Resources: []string{"*"}, ScopeKind: awsrequest.ScopeKnownGlobal}}}
+	withoutAcknowledgement := config.Policy{Default: config.PolicyDeny, Rules: []config.Rule{{ID: "iam-list", Effect: config.EffectAllow, Actions: []string{"iam:ListUsers"}, Resources: []string{"*"}}}}
+	engine, err := NewEngine(withoutAcknowledgement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.Evaluate(context.Background(), testInputFor(t, withoutAcknowledgement, global, iam)); got.ReasonCode != awserror.ReasonAWSRequiredWildcardNotApproved {
+		t.Fatalf("ListUsers without wildcard acknowledgement=%+v want aws_required_wildcard_not_approved", got)
+	}
+	withAcknowledgement := config.Policy{Default: config.PolicyDeny, Rules: []config.Rule{{ID: "iam-list", Effect: config.EffectAllow, Actions: []string{"iam:ListUsers"}, Resources: []string{"*"}, AllowAWSRequiredWildcard: true}}}
+	engine, err = NewEngine(withAcknowledgement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.Evaluate(context.Background(), testInputFor(t, withAcknowledgement, global, iam)); got.Result != DecisionAllow {
+		t.Fatalf("acknowledged ListUsers=%+v want allow", got)
+	}
+
+	s3 := awsrequest.AWSEndpoint{Partition: "aws", Host: "s3.us-east-1.amazonaws.com", Service: "s3", Region: "us-east-1"}
+	s3Mapping := awsrequest.MappingResult{Service: "s3", Operation: "GetObject", MapperVersion: "catalog", Confidence: awsrequest.ConfidenceHigh, Requirements: []awsrequest.IAMRequirement{{
+		Action: "s3:GetObject", Resources: []string{"arn:aws:s3:::fixture/a", "arn:aws:s3:::fixture/b"}, ScopeKind: awsrequest.ScopeSet,
+	}}}
+	s3Policy := config.Policy{Default: config.PolicyDeny, Rules: []config.Rule{{
+		ID: "objects", Effect: config.EffectAllow, Actions: []string{"s3:GetObject"}, Resources: []string{"arn:aws:s3:::fixture/*"},
+	}}}
+	engine, err = NewEngine(s3Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.Evaluate(context.Background(), testInputFor(t, s3Policy, s3Mapping, s3)); got.Result != DecisionAllow {
+		t.Fatalf("GetObject set requirements=%+v want allow", got)
+	}
+
+	lambda := awsrequest.AWSEndpoint{Partition: "aws", Host: "lambda.us-east-1.amazonaws.com", Service: "lambda", Region: "us-east-1"}
+	lambdaMapping := awsrequest.MappingResult{Service: "lambda", Operation: "CreateFunction", MapperVersion: "catalog", Confidence: awsrequest.ConfidenceHigh, Requirements: []awsrequest.IAMRequirement{
+		{Action: "lambda:CreateFunction", Resources: []string{"arn:aws:lambda:us-east-1:123456789012:function:fixture"}, ScopeKind: awsrequest.ScopeExact},
+		{Action: "iam:PassRole", Resources: []string{"arn:aws:iam::123456789012:role/fixture"}, ScopeKind: awsrequest.ScopeExact, Dependent: true},
+	}}
+	lambdaPolicy := config.Policy{Default: config.PolicyDeny, Rules: []config.Rule{
+		{ID: "function", Effect: config.EffectAllow, Actions: []string{"lambda:CreateFunction"}, Resources: []string{"arn:aws:lambda:us-east-1:123456789012:function:fixture"}},
+		{ID: "role", Effect: config.EffectAllow, Actions: []string{"iam:PassRole"}, Resources: []string{"arn:aws:iam::123456789012:role/fixture"}},
+	}}
+	engine, err = NewEngine(lambdaPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.Evaluate(context.Background(), testInputFor(t, lambdaPolicy, lambdaMapping, lambda)); got.Result != DecisionAllow {
+		t.Fatalf("CreateFunction complete primary/dependent requirements=%+v want allow", got)
+	}
+	lambdaPolicy.Rules = lambdaPolicy.Rules[:1]
+	engine, err = NewEngine(lambdaPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.Evaluate(context.Background(), testInputFor(t, lambdaPolicy, lambdaMapping, lambda)); got.ReasonCode != awserror.ReasonPolicyNoMatchingAllow {
+		t.Fatalf("CreateFunction missing PassRole=%+v want policy_no_matching_allow", got)
+	}
+}
+
 func TestEngineGlobalAcknowledgementAndCancellation(t *testing.T) {
 	p := config.Policy{Default: config.PolicyDeny, Rules: []config.Rule{{ID: "global", Effect: config.EffectAllow, Actions: []string{"s3:GetObject"}, Resources: []string{"*"}}}}
 	e, err := NewEngine(p)

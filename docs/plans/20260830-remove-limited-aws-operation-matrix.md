@@ -264,12 +264,12 @@ Files:
 - Modify: `internal/proxy/proxy_test.go` — count upstream calls for denied/unknown/ambiguous requests across multiple services and protocols.
 
 Steps:
-- [ ] Exercise properly signed requests for at least four shapes through production authentication, decode, map, and policy: IAM `ListUsers` (known-global Query), S3 `GetObject` (exact REST-XML), Lambda `CreateFunction` (dependent REST-JSON), and DynamoDB `BatchExecuteStatement` (multi-action JSON 1.0).
-- [ ] Split allow-path checks across operations: an acknowledged IAM known-global allow and an exact S3 allow each forward once and receive protocol-correct fake-upstream responses.
-- [ ] Split deny checks across operations: IAM explicit deny, S3 default deny, and Lambda missing dependent-action allow each forward zero times, preserve protocol/event ID, and write complete audit requirements.
-- [ ] Prove the IAM known-global allow without `allowAwsRequiredWildcard: true` is denied with `aws_required_wildcard_not_approved`, and prove a DynamoDB multi-action request cannot pass when any required action is absent or applicability is unresolved.
-- [ ] Add adversarial cases across different services for malformed Query `Action`, absent catalogued JSON operation, protocol disagreement, ambiguous REST metadata, mapper source disagreement, unresolved resource/dependency extraction, and corrupt catalog records; each must produce zero upstream requests.
-- [ ] Assert secrets and raw authorization/session-token values do not appear in XML, JSON, audit, metrics, or mapping evidence.
+- [x] Exercise properly signed requests for at least four shapes through production authentication, decode, map, and policy: IAM `ListUsers` (known-global Query), S3 `GetObject` (exact REST-XML), Lambda `CreateFunction` (dependent REST-JSON), and DynamoDB `BatchExecuteStatement` (multi-action JSON 1.0).
+- [x] Split allow-path checks across operations: an acknowledged IAM known-global allow and an exact S3 allow each forward once and receive protocol-correct fake-upstream responses.
+- [x] Split deny checks across operations: IAM explicit deny, S3 default deny, and Lambda missing dependent-action allow each forward zero times, preserve protocol/event ID, and write complete audit requirements.
+- [x] Prove the IAM known-global allow without `allowAwsRequiredWildcard: true` is denied with `aws_required_wildcard_not_approved`, and prove a DynamoDB multi-action request cannot pass when any required action is absent or applicability is unresolved.
+- [x] Add adversarial cases across different services for malformed Query `Action`, absent catalogued JSON operation, protocol disagreement, ambiguous REST metadata, mapper source disagreement, unresolved resource/dependency extraction, and corrupt catalog records; each must produce zero upstream requests.
+- [x] Assert secrets and raw authorization/session-token values do not appear in XML, JSON, audit, metrics, or mapping evidence.
 
 Verification:
 - `go test -race ./test/integration -run 'TestCatalogOperations|Test.*Unknown.*FailClosed' -count=1`

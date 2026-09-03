@@ -118,6 +118,14 @@ func (s *ProtocolServer) handle(w http.ResponseWriter, req *http.Request) {
 		_, _ = w.Write(failure.Body)
 		return
 	}
+	if response := CatalogResponse(s.Options.Service, operation, protocolFromRequest(req, body), "fixture-request-id"); response.Status != 0 {
+		for key, values := range response.Headers {
+			w.Header()[key] = append([]string(nil), values...)
+		}
+		w.WriteHeader(response.Status)
+		_, _ = w.Write(response.Body)
+		return
+	}
 	var response []byte
 	s.mu.Lock()
 	switch operation {
@@ -234,6 +242,26 @@ func (s *ProtocolServer) RoundTripper() http.RoundTripper {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// CatalogResponse returns a protocol-native success response for varied
+// catalog operations. It is intended for handlers installed after the
+// independent signature check and contains no request or credential material.
+func CatalogResponse(service, operation string, protocol Protocol, requestID string) Response {
+	switch {
+	case service == "iam" && operation == "ListUsers" && protocol == Query:
+		return Response{Status: http.StatusOK, Headers: http.Header{"Content-Type": {"text/xml"}, "X-Amzn-Requestid": {requestID}}, Body: []byte(`<ListUsersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListUsersResult><Users/><IsTruncated>false</IsTruncated></ListUsersResult><ResponseMetadata><RequestId>` + requestID + `</RequestId></ResponseMetadata></ListUsersResponse>`)}
+	case service == "s3" && operation == "GetObject" && protocol == RESTXML:
+		return Response{Status: http.StatusOK, Headers: http.Header{"Content-Type": {"application/octet-stream"}, "ETag": {`"fixture-etag"`}, "X-Amz-Request-Id": {requestID}}, Body: []byte("fixture object")}
+	case service == "lambda" && operation == "CreateFunction" && protocol == RESTJSON:
+		return Response{Status: http.StatusCreated, Headers: http.Header{"Content-Type": {"application/json"}, "X-Amzn-Requestid": {requestID}}, Body: []byte(`{"FunctionName":"fixture-function","FunctionArn":"arn:aws:lambda:us-east-1:123456789012:function:fixture-function"}`)}
+	case service == "dynamodb" && operation == "BatchExecuteStatement" && protocol == JSON10:
+		return JSONResponse(JSON10, http.StatusOK, requestID, map[string]any{"Responses": []any{}, "UnprocessedStatements": []any{}})
+	case service == "dynamodb" && operation == "GetItem" && protocol == JSON10:
+		return JSONResponse(JSON10, http.StatusOK, requestID, map[string]any{"Item": map[string]any{}})
+	default:
+		return Response{}
+	}
+}
 
 func operationName(req *http.Request, body []byte) string {
 	if target := req.Header.Get("X-Amz-Target"); target != "" {

@@ -76,13 +76,19 @@ func protocolFromRequest(req *http.Request, bodies ...[]byte) Protocol {
 	if req == nil {
 		return JSON11
 	}
+	ct := strings.ToLower(req.Header.Get("Content-Type"))
+	if strings.Contains(ct, "x-amz-json-1.0") {
+		return JSON10
+	}
+	if strings.Contains(ct, "x-amz-json-1.1") {
+		return JSON11
+	}
 	if target := req.Header.Get("X-Amz-Target"); strings.Contains(target, "Json10") {
 		return JSON10
 	}
 	if target := req.Header.Get("X-Amz-Target"); target != "" {
 		return JSON11
 	}
-	ct := strings.ToLower(req.Header.Get("Content-Type"))
 	if strings.Contains(ct, "json") {
 		return RESTJSON
 	}

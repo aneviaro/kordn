@@ -1343,11 +1343,14 @@ func mapReason(err error) string {
 		return "mapping_low_confidence"
 	}
 	x := strings.ToLower(err.Error())
+	if strings.Contains(x, "dependent ") || strings.Contains(x, "dependent-") {
+		return "dependent_permission_unresolved"
+	}
+	if strings.Contains(x, "mapping has no primary action") {
+		return "resource_unresolved"
+	}
 	if strings.Contains(x, "unknown operation") {
 		return "unknown_operation"
-	}
-	if strings.Contains(x, "dependent") {
-		return "dependent_permission_unresolved"
 	}
 	if strings.Contains(x, "unresolved") {
 		return "resource_unresolved"

@@ -1,0 +1,68 @@
+{
+  "name": "aws-operation-examples",
+  "description": "Mixed catalog-backed AWS Signature Version 4 operation examples",
+  "entries": [
+    {
+      "name": "iam-list-users-header-signed",
+      "source": "AWS IAM Signature Version 4 signing examples",
+      "source_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html",
+      "algorithm": "AWS4-HMAC-SHA256",
+      "method": "GET",
+      "canonical_uri": "/",
+      "canonical_querystring": "Action=ListUsers&Version=2010-05-08",
+      "canonical_headers": "content-type:application/x-www-form-urlencoded; charset=utf-8\nhost:iam.amazonaws.com\nx-amz-date:20150830T123600Z\n",
+      "signed_headers": "content-type;host;x-amz-date",
+      "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request_sha256": "f536975d06c0309214f805bb90ccff089219ecd68b2577efef23edd43b7e1a59",
+      "credential_scope": "20150830/us-east-1/iam/aws4_request",
+      "expected_service": "iam",
+      "expected_operation": "ListUsers",
+      "expected_protocol": "query"
+    },
+    {
+      "name": "s3-get-object-modeled",
+      "source": "AWS S3 GetObject API reference",
+      "source_url": "https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html",
+      "algorithm": "AWS4-HMAC-SHA256",
+      "method": "GET",
+      "canonical_uri": "/fixture/object.txt",
+      "canonical_headers": "host:s3.us-east-1.amazonaws.com\nx-amz-date:20260830T120000Z\n",
+      "signed_headers": "host;x-amz-date",
+      "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "credential_scope": "20260830/us-east-1/s3/aws4_request",
+      "expected_service": "s3",
+      "expected_operation": "GetObject",
+      "expected_protocol": "rest-xml"
+    },
+    {
+      "name": "lambda-create-function-modeled",
+      "source": "AWS Lambda CreateFunction API reference",
+      "source_url": "https://docs.aws.amazon.com/lambda/latest/api/API_CreateFunction.html",
+      "algorithm": "AWS4-HMAC-SHA256",
+      "method": "POST",
+      "canonical_uri": "/2015-03-31/functions",
+      "canonical_headers": "content-type:application/json\nhost:lambda.us-east-1.amazonaws.com\nx-amz-date:20260830T120000Z\n",
+      "signed_headers": "content-type;host;x-amz-date",
+      "payload_hash": "",
+      "credential_scope": "20260830/us-east-1/lambda/aws4_request",
+      "expected_service": "lambda",
+      "expected_operation": "CreateFunction",
+      "expected_protocol": "rest-json"
+    },
+    {
+      "name": "dynamodb-batch-execute-statement-modeled",
+      "source": "AWS DynamoDB BatchExecuteStatement API reference",
+      "source_url": "https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_BatchExecuteStatement.html",
+      "algorithm": "AWS4-HMAC-SHA256",
+      "method": "POST",
+      "canonical_uri": "/",
+      "canonical_headers": "content-type:application/x-amz-json-1.0\nhost:dynamodb.us-east-1.amazonaws.com\nx-amz-date:20260830T120000Z\n",
+      "signed_headers": "content-type;host;x-amz-date",
+      "payload_hash": "",
+      "credential_scope": "20260830/us-east-1/dynamodb/aws4_request",
+      "expected_service": "dynamodb",
+      "expected_operation": "BatchExecuteStatement",
+      "expected_protocol": "json1.0"
+    }
+  ]
+}
