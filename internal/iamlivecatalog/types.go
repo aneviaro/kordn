@@ -28,10 +28,15 @@ type Catalog struct {
 	sourceHash     string
 	services       []Service
 	serviceIndex   map[string][]int
-	operations     map[string][]Operation
+	operations     map[string][]indexedOperation
 	actions        map[string][]ActionDefinition
 	mappings       map[string][]ActionMapping
 	permissionless map[string]bool
+}
+
+type indexedOperation struct {
+	modelKey  string
+	operation Operation
 }
 
 type Service struct {

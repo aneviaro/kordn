@@ -111,7 +111,7 @@ func (c *Catalog) Operation(service, operation string) (Operation, error) {
 		}
 		return Operation{}, fmt.Errorf("ambiguous operation %s:%s", service, operation)
 	}
-	return x[0].Clone(), nil
+	return x[0].operation.Clone(), nil
 }
 func (c *Catalog) Actions() []ActionDefinition {
 	if c == nil {
@@ -191,7 +191,7 @@ func parse() (*Catalog, error) {
 	if len(rawDefs) == 0 {
 		return nil, errors.New("iam_definition.json: empty")
 	}
-	cat := &Catalog{version: catalogVersion, serviceIndex: map[string][]int{}, operations: map[string][]Operation{}, actions: map[string][]ActionDefinition{}, mappings: map[string][]ActionMapping{}, permissionless: map[string]bool{}}
+	cat := &Catalog{version: catalogVersion, serviceIndex: map[string][]int{}, operations: map[string][]indexedOperation{}, actions: map[string][]ActionDefinition{}, mappings: map[string][]ActionMapping{}, permissionless: map[string]bool{}}
 	h := sha256.New()
 	for _, item := range []struct {
 		name string
@@ -331,7 +331,7 @@ func parse() (*Catalog, error) {
 			} else {
 				o.MappingState = EvidenceAbsent
 			}
-			cat.replaceOperation(*o)
+			cat.replaceOperation(i, *o)
 		}
 	}
 	cat.sourceHash = hex.EncodeToString(h.Sum(nil))
@@ -548,32 +548,15 @@ func (c *Catalog) addAPI(file string, a rawAPI) error {
 	for _, alias := range s.Aliases {
 		for _, o := range s.Operations {
 			k := operationKey(alias, o.Name)
-			conflict := false
+			equivalent := false
 			for _, prior := range c.operations[k] {
-				// API model revisions commonly repeat an operation byte-for-byte.
-				// Collapse only those equivalent index records; retain distinct
-				// definitions and make their lookup fail closed below.
-				if !operationEquivalent(prior, o) {
-					conflict = true
+				if prior.modelKey == key && operationEquivalent(prior.operation, o) {
+					equivalent = true
+					break
 				}
 			}
-			if conflict {
-				for i := range c.operations[k] {
-					c.operations[k][i].State = EvidenceContradictory
-				}
-				for si := range c.services {
-					for sj := range c.services[si].Operations {
-						if c.services[si].Operations[sj].Service == o.Service && strings.EqualFold(c.services[si].Operations[sj].Name, o.Name) {
-							c.services[si].Operations[sj].State = EvidenceContradictory
-						}
-					}
-				}
-				o.State = EvidenceContradictory
-				c.operations[k] = append(c.operations[k], o)
-				continue
-			}
-			if len(c.operations[k]) == 0 {
-				c.operations[k] = append(c.operations[k], o)
+			if !equivalent {
+				c.operations[k] = append(c.operations[k], indexedOperation{modelKey: key, operation: o})
 			}
 		}
 	}
@@ -585,27 +568,22 @@ func operationEquivalent(a, b Operation) bool {
 		a.InputShape == b.InputShape && a.OutputShape == b.OutputShape && a.Route == b.Route &&
 		reflect.DeepEqual(a.QueryBindings, b.QueryBindings)
 }
-func (c *Catalog) replaceOperation(o Operation) {
-	// Update only the service and alias buckets that can contain this record.
-	// Scanning the complete operation index here makes loading quadratic in the
-	// size of the AWS model set.
-	serviceIndexes := c.serviceIndex[strings.ToLower(o.Service)]
-	for _, si := range serviceIndexes {
-		for j := range c.services[si].Operations {
-			if c.services[si].Operations[j].Name == o.Name {
-				c.services[si].Operations[j] = o
+func (c *Catalog) replaceOperation(serviceIndex int, o Operation) {
+	// Update only the selected service model and its alias buckets. Matching by
+	// endpoint and operation alone would overwrite API-version variants.
+	if serviceIndex < 0 || serviceIndex >= len(c.services) {
+		return
+	}
+	service := c.services[serviceIndex]
+	for _, alias := range service.Aliases {
+		k := operationKey(alias, o.Name)
+		values := c.operations[k]
+		for i := range values {
+			if values[i].modelKey == service.Key && operationEquivalent(values[i].operation, o) {
+				values[i].operation = o
 			}
 		}
-		for _, alias := range c.services[si].Aliases {
-			k := operationKey(alias, o.Name)
-			values := c.operations[k]
-			for i := range values {
-				if values[i].Service == o.Service && values[i].Name == o.Name {
-					values[i] = o
-				}
-			}
-			c.operations[k] = values
-		}
+		c.operations[k] = values
 	}
 }
 func (c *Catalog) addDefinition(d rawService) error {

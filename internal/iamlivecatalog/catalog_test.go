@@ -367,12 +367,16 @@ func TestCatalogIndexesEveryAPIOperation(t *testing.T) {
 	for _, s := range c.Services() {
 		for _, o := range s.Operations {
 			count++
-			if _, err := c.Operation(s.EndpointPrefix, o.Name); err != nil {
-				// Duplicate API model records are intentionally ambiguous, but
-				// every record remains present in the service index.
-				if o.State != EvidenceContradictory {
-					t.Fatalf("unindexed %s/%s: %v", s.EndpointPrefix, o.Name, err)
+			indexed := c.operations[operationKey(s.EndpointPrefix, o.Name)]
+			found := false
+			for _, candidate := range indexed {
+				if candidate.modelKey == s.Key && operationEquivalent(candidate.operation, o) {
+					found = true
+					break
 				}
+			}
+			if !found {
+				t.Fatalf("unindexed %s/%s model %q", s.EndpointPrefix, o.Name, s.Key)
 			}
 		}
 	}

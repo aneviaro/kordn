@@ -73,14 +73,17 @@ func TestLookupRequestRejectsTargetOperationMismatch(t *testing.T) {
 	}
 }
 
-func TestLookupRequestRejectsContradictoryOperationRecord(t *testing.T) {
+func TestLookupRequestSelectsExactJSONAPIVersion(t *testing.T) {
 	a, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.LookupRequest("dynamodb", "GetItem", WireIdentity{Protocol: awsrequest.ProtocolJSON10, Method: "POST", Path: "/", Target: "DynamoDB_20120810.GetItem"}, map[string]awsrequest.Value{"TableName": {Kind: awsrequest.ValueString, String: "events"}})
-	if err == nil {
-		t.Fatal("contradictory operation record was promoted")
+	result, err := a.LookupRequest("dynamodb", "GetItem", WireIdentity{Protocol: awsrequest.ProtocolJSON10, Method: "POST", Path: "/", Target: "DynamoDB_20120810.GetItem"}, map[string]awsrequest.Value{"TableName": {Kind: awsrequest.ValueString, String: "events"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Primary) != 1 || result.Primary[0].Name != "GetItem" {
+		t.Fatalf("unexpected GetItem lookup result: %+v", result)
 	}
 }
 
