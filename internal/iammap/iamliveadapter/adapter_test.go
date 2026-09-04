@@ -1,6 +1,7 @@
 package iamliveadapter
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
@@ -18,6 +19,46 @@ func TestLookupUsesPinnedActionsAndInvokesDependencies(t *testing.T) {
 	}
 	if len(result.Primary) != 1 || result.Primary[0].Name != "DescribeInstances" || !result.DependenciesCertain {
 		t.Fatalf("unexpected lookup result: %+v", result)
+	}
+}
+
+func TestRouteMatchesModeledRESTQueryBindings(t *testing.T) {
+	record := iamlivecatalog.Operation{
+		Route: iamlivecatalog.Route{Method: "GET", URI: "/bucket/{key}"},
+		QueryBindings: []iamlivecatalog.QueryBinding{{
+			Member: "UploadId", LocationName: "uploadId", Required: true,
+		}},
+	}
+	base := WireIdentity{Protocol: awsrequest.ProtocolRESTXML, Method: "GET", Path: "/bucket/object"}
+	for name, tc := range map[string]struct {
+		query url.Values
+		want  bool
+	}{
+		"required query member":  {query: url.Values{"uploadId": {"upload"}}, want: true},
+		"unknown query member":   {query: url.Values{"other": {"value"}}, want: false},
+		"duplicate query member": {query: url.Values{"uploadId": {"one", "two"}}, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			identity := base
+			identity.Query = tc.query
+			if got := routeMatches(record, iamlivecatalog.Service{}, "GetObject", identity); got != tc.want {
+				t.Errorf("routeMatches(%q, %q) = %t, want %t", record.Route.URI, name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRouteMatchesRESTGreedyPathLabel(t *testing.T) {
+	record := iamlivecatalog.Operation{
+		Route: iamlivecatalog.Route{Method: "GET", URI: "/bucket/{key+}"},
+	}
+	identity := WireIdentity{
+		Protocol: awsrequest.ProtocolRESTXML,
+		Method:   "GET",
+		Path:     "/bucket/folder/object",
+	}
+	if got := routeMatches(record, iamlivecatalog.Service{}, "GetObject", identity); !got {
+		t.Errorf("routeMatches(%q, %q) = %t, want true", record.Route.URI, identity.Path, got)
 	}
 }
 

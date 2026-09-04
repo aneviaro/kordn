@@ -56,6 +56,32 @@ func defaultWireCatalog() wireCatalog {
 	return c
 }
 
+// MatchRESTRoute reports whether a request matches a modeled REST route and
+// returns the path parameters captured from the route. It rejects unknown
+// query parameters and requires every modeled required query member.
+func MatchRESTRoute(
+	uri string,
+	requestPath string,
+	q url.Values,
+	bindings []iamlivecatalog.QueryBinding,
+	l DecodeLimits,
+) (map[string]Value, bool, error) {
+	if len(requestPath) > l.MaxPathBytes || !strings.HasPrefix(requestPath, "/") {
+		return nil, false, errors.New("REST path is malformed")
+	}
+	if err := validateRESTQuery(q, l); err != nil {
+		return nil, false, err
+	}
+	params, ok, err := matchRESTURI(uri, requestPath, q, l)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	if !matchRESTQueryBindings(uri, bindings, q, l) {
+		return nil, false, nil
+	}
+	return params, true, nil
+}
+
 // restOperationFromCatalog matches only raw, exact service operation records.
 // It intentionally does not use Catalog.Operation, whose normalized index is
 // allowed to collapse equivalent records and resolve aliases.
@@ -83,11 +109,11 @@ func restOperationFromCatalog(service, path, method string, q url.Values, protoc
 				if o.Service != service || !validEvidenceService(o.Service) || !validEvidenceOperation(o.Name) || o.Route.Method != method {
 					continue
 				}
-				candidate, ok, err := matchRESTURI(o.Route.URI, path, q, l)
+				candidate, ok, err := MatchRESTRoute(o.Route.URI, path, q, o.QueryBindings, l)
 				if err != nil {
 					return "", nil, err
 				}
-				if !ok || !matchRESTQueryBindings(o.Route.URI, o.QueryBindings, q, l) {
+				if !ok {
 					continue
 				}
 				matches++
