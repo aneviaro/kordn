@@ -154,41 +154,23 @@ func routeMatches(record iamlivecatalog.Operation, service iamlivecatalog.Servic
 		return parts[0] == service.TargetPrefix && parts[1] == operation &&
 			record.Route.TargetPrefix == parts[0] && record.Route.JSONVersion == jsonVersion(id.Protocol)
 	case awsrequest.ProtocolRESTJSON, awsrequest.ProtocolRESTXML:
-		return restPathMatches(record.Route.URI, id.Path)
+		_, ok, err := awsrequest.MatchRESTRoute(
+			record.Route.URI,
+			id.Path,
+			id.Query,
+			record.QueryBindings,
+			awsrequest.DefaultDecodeLimits(),
+		)
+		return err == nil && ok
 	}
 	return false
 }
+
 func jsonVersion(p awsrequest.AWSProtocol) string {
 	if p == awsrequest.ProtocolJSON10 {
 		return "1.0"
 	}
 	return "1.1"
-}
-
-func restPathMatches(template, actual string) bool {
-	if template == "" || actual == "" {
-		return false
-	}
-	if i := strings.IndexByte(template, '?'); i >= 0 {
-		template = template[:i]
-	}
-	if template == "/" {
-		return actual == "/"
-	}
-	t := strings.Split(strings.Trim(template, "/"), "/")
-	a := strings.Split(strings.Trim(actual, "/"), "/")
-	if len(t) != len(a) {
-		return false
-	}
-	for i := range t {
-		if strings.HasPrefix(t[i], "{") && strings.HasSuffix(t[i], "}") {
-			continue
-		}
-		if t[i] != a[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // Lookup is retained for metadata clients. The production mapper deliberately
