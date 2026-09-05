@@ -48,7 +48,7 @@ func parseQueryString(raw string, l DecodeLimits) (url.Values, error) {
 	}
 	return v, nil
 }
-func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProtocol, c wireCatalog, l DecodeLimits) (string, map[string]Value, url.Values, error) {
+func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProtocol, c *wireIndex, l DecodeLimits) (string, map[string]Value, url.Values, error) {
 	b, e := parseQueryString(string(body), l)
 	if e != nil {
 		return "", nil, nil, e
@@ -117,31 +117,12 @@ func decodeQueryBody(body []byte, q url.Values, service string, protocol AWSProt
 	return a, params, all, nil
 }
 
-// catalogQueryOperation walks the service records rather than the catalog's
-// normalized operation index. This keeps API-version, protocol, service, and
-// operation identity checks independent and makes duplicate raw evidence fail
-// closed.
-func catalogQueryOperation(c wireCatalog, service, version string, protocol AWSProtocol, action string) bool {
+// catalogQueryOperation uses the exact endpoint/protocol/version/action bucket;
+// every source occurrence remains visible so duplicates fail closed.
+func catalogQueryOperation(c *wireIndex, service, version string, protocol AWSProtocol, action string) bool {
 	if c == nil || service == "" || version == "" || action == "" {
 		return false
 	}
-	matches := 0
-	for _, s := range c.Services() {
-		if s.EndpointPrefix != service || s.APIVersion != version {
-			continue
-		}
-		wire, ok := catalogProtocol(s.Protocol, "")
-		if !ok || wire != protocol {
-			continue
-		}
-		for _, o := range s.Operations {
-			if o.Service == service && o.Name == action {
-				matches++
-				if o.State != iamlivecatalog.EvidenceKnown {
-					return false
-				}
-			}
-		}
-	}
-	return matches == 1
+	candidates := c.query[queryIndexKey{service, string(protocol), version, action}]
+	return len(candidates) == 1 && candidates[0].operation.State == iamlivecatalog.EvidenceKnown
 }

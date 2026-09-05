@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-func decodeRESTXMLBody(body []byte, service, path, method string, q url.Values, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
+func decodeRESTXMLBody(body []byte, service, path, method string, q url.Values, c *wireIndex, l DecodeLimits) (string, map[string]Value, error) {
 	op, p, e := restXMLOperationFromCatalog(service, path, method, q, c, l)
 	if e != nil {
 		return "", nil, e
@@ -34,7 +34,7 @@ func restXMLOperation(service, path, method string, q url.Values, l DecodeLimits
 	return restXMLOperationFromCatalog(service, path, method, q, defaultWireCatalog(), l)
 }
 
-func restXMLOperationFromCatalog(service, path, method string, q url.Values, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
+func restXMLOperationFromCatalog(service, path, method string, q url.Values, c *wireIndex, l DecodeLimits) (string, map[string]Value, error) {
 	return restOperationFromCatalog(service, path, method, q, ProtocolRESTXML, c, l)
 }
 func parseXMLParameters(body []byte, l DecodeLimits) (map[string]Value, error) {
