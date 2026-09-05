@@ -197,6 +197,64 @@ func TestSharedDecoderConcurrentActualDecode(t *testing.T) {
 	}
 }
 
+var (
+	allocationDecodeResult *DecodedAWSRequest
+	allocationDecodeErr    error
+)
+
+func TestBenchmarkDecodeQueryAllocationCeiling(t *testing.T) {
+	if defaultWireIndexOrNil() == nil {
+		t.Fatal("wire index unavailable")
+	}
+	d, err := NewConfiguredDecoder(DecoderOptions{CallerAccountID: "123456789012"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, v := stsRequest(io.NopCloser(strings.NewReader("")))
+	const ceiling = 128
+	observed := testing.AllocsPerRun(20, func() {
+		allocationDecodeResult, allocationDecodeErr = d.Decode(context.Background(), v, v.Endpoint)
+	})
+	if allocationDecodeErr != nil {
+		t.Fatalf("BenchmarkDecodeQuery failed: %v (observed allocations %.0f, ceiling %d)", allocationDecodeErr, observed, ceiling)
+	}
+	if observed > ceiling {
+		t.Fatalf("BenchmarkDecodeQuery allocations: observed %.0f, ceiling %d", observed, ceiling)
+	}
+}
+
+func TestBenchmarkDecodeJSONAllocationCeiling(t *testing.T) {
+	if defaultWireIndexOrNil() == nil {
+		t.Fatal("wire index unavailable")
+	}
+	ep, err := DefaultEndpointClassifier.Classify("dynamodb.us-east-1.amazonaws.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := http.NewRequest(http.MethodPost, "https://dynamodb.us-east-1.amazonaws.com/", strings.NewReader(`{"TableName":"events","Key":{"id":{"S":"1"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Host = ep.Host
+	r.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	r.Header.Set("X-Amz-Target", "DynamoDB_20120810.GetItem")
+	v := &VerifiedRequest{Request: r, Endpoint: ep, Protocol: ProtocolJSON10, SigningScheme: SigningHeaderV4, SigningRegion: ep.Region, SigningService: ep.Service, PayloadMode: PayloadHashSHA256}
+	d, err := NewConfiguredDecoder(DecoderOptions{CallerAccountID: "123456789012"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ceiling = 256
+	observed := testing.AllocsPerRun(20, func() {
+		allocationDecodeResult, allocationDecodeErr = d.Decode(context.Background(), v, v.Endpoint)
+	})
+	if allocationDecodeErr != nil {
+		t.Fatalf("BenchmarkDecodeJSON failed: %v (observed allocations %.0f, ceiling %d)", allocationDecodeErr, observed, ceiling)
+	}
+	if observed > ceiling {
+		t.Fatalf("BenchmarkDecodeJSON allocations: observed %.0f, ceiling %d", observed, ceiling)
+	}
+}
+
 type wireIndexTestError struct{ message string }
 
 func (e *wireIndexTestError) Error() string { return e.message }

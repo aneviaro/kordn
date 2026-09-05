@@ -28,10 +28,22 @@ XML/Query denials remain protocol-native with stable reason/event identifiers;
 unsupported, ambiguous, or unresolved catalog evidence is denied locally and is
 never forwarded upstream.
 
-Performance is a measured release gate, not a compatibility promise. On the
-documented current Darwin amd64 reference machine run
-`KORDN_STRICT_PERFORMANCE=1 go test ./test/integration -run TestStrictPerformance -count=1 -v`.
-The output records actual throughput, p50/p95/p99, RSS, and resource counters.
+Performance is a measured release gate, not a compatibility promise. For a
+focused local catalog smoke test, run `make benchmark-hotpath`; it requires the
+pinned iamlive catalog and reports allocations as well as timings. To compare
+common decoder samples from two refs, run
+`./scripts/bench-compare.sh <baseline-ref> <candidate-ref>`; recorded output
+files can instead be compared with
+`./scripts/bench-compare.sh --files <baseline.txt> <candidate.txt>`. File and ref
+comparisons require the separately installed `benchstat` tool; the script does
+not download it. CI treats benchmark timings as diagnostic only, while the
+structural and allocation tests are deterministic hard gates.
+
+On the documented current Darwin amd64 reference machine run
+`KORDN_STRICT_PERFORMANCE=1 make strict-performance` and
+`KORDN_STRICT_PERFORMANCE=1 make strict-compatibility`. These strict checks
+record actual throughput, p50/p95/p99, RSS, and resource counters. Shared-runner
+numbers are not performance guarantees.
 
 ## Explicit non-containment limitations
 

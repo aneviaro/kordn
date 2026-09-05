@@ -210,15 +210,15 @@ Files:
 - Modify: `docs/compatibility.md` — document focused local comparison and keep strict release measurements distinct from CI smoke.
 
 Steps:
-- [ ] Keep the existing Query and JSON benchmark names stable for historical comparison; ensure setup and catalog initialization remain outside timed sections and results cannot be compiler-elided.
-- [ ] Add focused benchmarks for wire-index candidate lookup and direct request-aware adapter lookup, including an ambiguous/negative case that must remain fail closed.
-- [ ] Add `testing.AllocsPerRun` tests with ceilings derived from repeated optimized runs and enough headroom for Go patch releases, but orders of magnitude below the current `225962`/`602597` allocations per decode.
-- [ ] Add a structural spy test that fails if decode or adapter lookup invokes a complete catalog snapshot/enumerator after initialization; use this as the primary non-timing regression gate.
-- [ ] Implement `scripts/bench-compare.sh` to accept baseline/candidate refs or pre-recorded files, run at least ten samples with `-benchmem`, and compare them through `benchstat`. Keep `benchstat` a documented developer prerequisite rather than adding an unpinned runtime dependency or network access to normal checks.
-- [ ] Add `benchmark-hotpath` to `.PHONY`; run only the named decoder, wire-index, and adapter benchmarks with `iamlive-check`. Leave `benchmark` as the complete unfiltered suite.
-- [ ] Add a CI step for `make benchmark-hotpath`. Treat benchmark command/test failures as fatal but publish timing as diagnostic output; rely on structural/allocation tests and release Section 21 checks for hard gates.
-- [ ] Record the focused comparison command and reference-machine strict commands in `docs/compatibility.md`; do not present shared-runner numbers as product guarantees.
-- [ ] Compare pre-change and post-change results with at least ten samples, retain the `benchstat` output in the implementing PR description or review artifact, and reject the change if catalog-copy allocations remain visible.
+- [x] Keep the existing Query and JSON benchmark names stable for historical comparison; ensure setup and catalog initialization remain outside timed sections and results cannot be compiler-elided.
+- [x] Add focused benchmarks for wire-index candidate lookup and direct request-aware adapter lookup, including an ambiguous/negative case that must remain fail closed.
+- [x] Add `testing.AllocsPerRun` tests with ceilings derived from repeated optimized runs and enough headroom for Go patch releases, but orders of magnitude below the current `225962`/`602597` allocations per decode.
+- [x] Add a structural spy test that fails if decode or adapter lookup invokes a complete catalog snapshot/enumerator after initialization; use this as the primary non-timing regression gate.
+- [x] Implement `scripts/bench-compare.sh` to accept baseline/candidate refs or pre-recorded files, run at least ten samples with `-benchmem`, and compare them through `benchstat`. Keep `benchstat` a documented developer prerequisite rather than adding an unpinned runtime dependency or network access to normal checks.
+- [x] Add `benchmark-hotpath` to `.PHONY`; run only the named decoder, wire-index, and adapter benchmarks with `iamlive-check`. Leave `benchmark` as the complete unfiltered suite.
+- [x] Add a CI step for `make benchmark-hotpath`. Treat benchmark command/test failures as fatal but publish timing as diagnostic output; rely on structural/allocation tests and release Section 21 checks for hard gates.
+- [x] Record the focused comparison command and reference-machine strict commands in `docs/compatibility.md`; do not present shared-runner numbers as product guarantees.
+- [x] Compare pre-change and post-change results with at least ten samples, retain the `benchstat` output in the implementing PR description or review artifact, and reject the change if catalog-copy allocations remain visible.
 
 Verification:
 - `make benchmark-hotpath`
