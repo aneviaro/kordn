@@ -244,6 +244,52 @@ func TestProxy_TunnelsNonAWSOpaque(t *testing.T) {
 	}
 }
 
+func TestProxy_NonAWSTunnelOutlivesConnectTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn)
+	}()
+
+	port := mustPort(t, listener.Addr())
+	server := newTestProxy(t, Config{
+		Resolver: ResolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		}),
+		TargetAllow: func(host string, ip net.IP) bool {
+			return host == "websocket.example" && ip.IsLoopback()
+		},
+		Limits: Limits{ConnectTimeout: 25 * time.Millisecond, IdleTimeout: time.Second},
+	})
+	conn := openProxy(t, server)
+	t.Cleanup(func() { _ = conn.Close() })
+	writeConnect(t, conn, "websocket.example:"+strconv.Itoa(port), true)
+	if response := readProxyResponse(t, conn); response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status = %d, want 200", response.StatusCode)
+	}
+
+	time.Sleep(3 * server.limits.ConnectTimeout)
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write after ConnectTimeout: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	got := make([]byte, len("ping"))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatalf("read after ConnectTimeout: %v", err)
+	}
+	if string(got) != "ping" {
+		t.Fatalf("echo after ConnectTimeout = %q, want %q", got, "ping")
+	}
+}
+
 func TestProxy_InterceptsRecognizedAWS(t *testing.T) {
 	const host = "sts.example.test"
 	var called atomic.Int32
@@ -547,6 +593,38 @@ func TestProxy_TunnelCancellationClosesBothDirections(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("tunnel did not stop after cancellation")
+	}
+}
+
+func TestProxy_TunnelIdleTimeoutTracksActivity(t *testing.T) {
+	client, proxyClient := net.Pipe()
+	proxyUpstream, upstream := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		tunnel(context.Background(), proxyClient, nil, proxyUpstream, Limits{IdleTimeout: 50 * time.Millisecond})
+		close(done)
+	}()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = upstream.Close()
+		<-done
+	})
+
+	for range 3 {
+		if _, err := client.Write([]byte{'x'}); err != nil {
+			t.Fatalf("active tunnel write: %v", err)
+		}
+		var got [1]byte
+		if _, err := io.ReadFull(upstream, got[:]); err != nil {
+			t.Fatalf("active tunnel read: %v", err)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("inactive tunnel did not stop after IdleTimeout")
 	}
 }
 

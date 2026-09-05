@@ -30,46 +30,65 @@ func tunnel(ctx context.Context, client net.Conn, clientReader *bufio.Reader, up
 	if clientReader == nil {
 		clientReader = bufio.NewReader(client)
 	}
+	activity := make(chan struct{}, 1)
 	bufferedClient := &bufferedConn{Conn: client, reader: clientReader}
 	copyDone := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(upstream, bufferedClient)
+		_, _ = io.Copy(upstream, activityReader{reader: bufferedClient, activity: activity})
 		closeWrite(upstream)
 		copyDone <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(client, upstream)
+		_, _ = io.Copy(client, activityReader{reader: upstream, activity: activity})
 		closeWrite(client)
 		copyDone <- struct{}{}
 	}()
 
-	// Preserve half-close semantics: one finished direction should not discard
-	// a response still being written in the other direction. Context
-	// cancellation and an idle peer, however, must close both sockets so the
-	// copier goroutines cannot outlive the request indefinitely.
-	select {
-	case <-copyDone:
-	case <-ctxDone(ctx):
-		_ = client.Close()
-		_ = upstream.Close()
-		return
-	}
 	idle := limits.IdleTimeout
 	if idle <= 0 {
 		idle = DefaultLimits().IdleTimeout
 	}
 	timer := time.NewTimer(idle)
 	defer timer.Stop()
-	select {
-	case <-copyDone:
-		return
-	case <-ctxDone(ctx):
-		_ = client.Close()
-		_ = upstream.Close()
-	case <-timer.C:
-		_ = client.Close()
-		_ = upstream.Close()
+	finished := 0
+	for finished < 2 {
+		select {
+		case <-copyDone:
+			finished++
+		case <-activity:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(idle)
+		case <-ctxDone(ctx):
+			_ = client.Close()
+			_ = upstream.Close()
+			return
+		case <-timer.C:
+			_ = client.Close()
+			_ = upstream.Close()
+			return
+		}
 	}
+}
+
+type activityReader struct {
+	reader   io.Reader
+	activity chan<- struct{}
+}
+
+func (r activityReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		select {
+		case r.activity <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func ctxDone(ctx context.Context) <-chan struct{} {
