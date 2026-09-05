@@ -475,14 +475,14 @@ func (s *Server) handleConnect(writer http.ResponseWriter, req *http.Request) {
 	}
 	// Non-AWS CONNECT is still an outbound relay, so validate every DNS
 	// answer before opening either a direct socket or a corporate proxy.
-	ctx, cancel := context.WithTimeout(req.Context(), s.limits.ConnectTimeout)
-	defer cancel()
-	ips, err := ResolveAndValidate(ctx, dest.Host, s.resolver, s.config.TargetAllow)
+	connectCtx, cancelConnect := context.WithTimeout(req.Context(), s.limits.ConnectTimeout)
+	defer cancelConnect()
+	ips, err := ResolveAndValidate(connectCtx, dest.Host, s.resolver, s.config.TargetAllow)
 	if err != nil {
 		http.Error(writer, "destination rejected", http.StatusForbidden)
 		return
 	}
-	upstream, err := s.dialDestination(ctx, dest, ips, proxyURL)
+	upstream, err := s.dialDestination(connectCtx, dest, ips, proxyURL)
 	if err != nil {
 		http.Error(writer, "destination unavailable", http.StatusBadGateway)
 		return
@@ -511,7 +511,9 @@ func (s *Server) handleConnect(writer http.ResponseWriter, req *http.Request) {
 		_ = upstream.Close()
 		return
 	}
-	tunnel(ctx, client, buffered.Reader, upstream, s.limits)
+	// The connection deadline bounds only DNS and dialing. Once established,
+	// the tunnel follows the client request and activity-based idle lifetime.
+	tunnel(req.Context(), client, buffered.Reader, upstream, s.limits)
 	s.untrackConn(client)
 }
 
