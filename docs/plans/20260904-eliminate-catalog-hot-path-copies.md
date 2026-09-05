@@ -132,16 +132,16 @@ Files:
 - Test: `internal/iammap/golden_wire_test.go` and `test/integration/catalog_operations_test.go` — verify cross-package wire behavior remains unchanged.
 
 Steps:
-- [ ] Build maps for endpoint protocol evidence, Query tuples `(service, protocol, API version, action)`, JSON tuples `(service, protocol, target prefix, operation)`, and REST candidate groups `(service, protocol, method)`. Retain slices of candidates for zero/one/many decisions; never overwrite or deduplicate a prior occurrence.
-- [ ] Precompute JSON variant-target evidence so `operationHasVariantTarget` does not perform a nested service/operation scan.
-- [ ] Parse and validate modeled fixed route-query data during index construction where possible. Store an initialization error for malformed catalog evidence rather than reparsing catalog route strings on every request.
-- [ ] Initialize the pinned default index once and share its immutable pointer across configured decoders and package convenience functions. Keep a non-global constructor for same-package tests; do not reset `sync.Once` state in tests.
-- [ ] Change `Decoder.catalog` to an immutable wire-index dependency and propagate construction errors through the existing `configErr`/`NewConfiguredDecoder` path.
-- [ ] Rewrite `authoritativeProtocolFor`, `validateModeledWireRoute`, `catalogQueryOperation`, `targetOperationFor`, `operationHasVariantTarget`, and REST matching entry points to use bounded candidate slices while preserving current validation order and error/evidence semantics.
-- [ ] Keep endpoint reclassification, signing-service/region agreement, content-type precedence, exact `Version`, duplicate query rejection, route-before-body validation, and decoded failure evidence unchanged.
-- [ ] Add structural tests with an instrumented source that permits catalog snapshot construction once and fails if a decode attempts source enumeration afterward.
-- [ ] Add duplicate-candidate tests for Query versions, JSON target variants, and identical REST method/URI routes separated by required query bindings. Assert zero or multiple surviving candidates fail closed.
-- [ ] Run concurrent decode tests under `-race` against one shared configured decoder to prove the index is read-only after publication.
+- [x] Build maps for endpoint protocol evidence, Query tuples `(service, protocol, API version, action)`, JSON tuples `(service, protocol, target prefix, operation)`, and REST candidate groups `(service, protocol, method)`. Retain slices of candidates for zero/one/many decisions; never overwrite or deduplicate a prior occurrence.
+- [x] Precompute JSON variant-target evidence so `operationHasVariantTarget` does not perform a nested service/operation scan.
+- [x] Parse and validate modeled fixed route-query data during index construction where possible. Store an initialization error for malformed catalog evidence rather than reparsing catalog route strings on every request.
+- [x] Initialize the pinned default index once and share its immutable pointer across configured decoders and package convenience functions. Keep a non-global constructor for same-package tests; do not reset `sync.Once` state in tests.
+- [x] Change `Decoder.catalog` to an immutable wire-index dependency and propagate construction errors through the existing `configErr`/`NewConfiguredDecoder` path.
+- [x] Rewrite `authoritativeProtocolFor`, `validateModeledWireRoute`, `catalogQueryOperation`, `targetOperationFor`, `operationHasVariantTarget`, and REST matching entry points to use bounded candidate slices while preserving current validation order and error/evidence semantics.
+- [x] Keep endpoint reclassification, signing-service/region agreement, content-type precedence, exact `Version`, duplicate query rejection, route-before-body validation, and decoded failure evidence unchanged.
+- [x] Add structural tests with an instrumented source that permits catalog snapshot construction once and fails if a decode attempts source enumeration afterward.
+- [x] Add duplicate-candidate tests for Query versions, JSON target variants, and identical REST method/URI routes separated by required query bindings. Assert zero or multiple surviving candidates fail closed.
+- [x] Run concurrent decode tests under `-race` against one shared configured decoder to prove the index is read-only after publication.
 
 Verification:
 - `go test ./internal/awsrequest -count=1`

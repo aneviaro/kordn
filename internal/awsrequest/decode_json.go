@@ -31,18 +31,11 @@ type DecoderOptions struct {
 	CallerAccountID string // trusted run context; never read from request data
 }
 
-// wireCatalog is intentionally unexported: production decoders always use the
-// pinned embedded catalog, while same-package tests can inject malformed or
-// ambiguous records without creating a runtime operation override.
-type wireCatalog interface {
-	Services() []iamlivecatalog.Service
-}
-
 type Decoder struct {
 	limits          DecodeLimits
 	classifier      EndpointClassifier
 	callerAccountID string
-	catalog         wireCatalog
+	catalog         *wireIndex
 	configErr       error
 }
 
@@ -105,9 +98,13 @@ func newDecoder(x DecodeLimits, c EndpointClassifier, account string) *Decoder {
 	if x.MaxPathBytes > 0 {
 		d.MaxPathBytes = x.MaxPathBytes
 	}
-	cat, catErr := iamlivecatalog.Load()
-	if configErr == nil {
-		configErr = catErr
+	cat := defaultWireIndexOrNil()
+	if configErr == nil && cat == nil {
+		if defaultWireIndexErr != nil {
+			configErr = defaultWireIndexErr
+		} else {
+			configErr = errors.New("wire index is unavailable")
+		}
 	}
 	return &Decoder{limits: d, classifier: c, callerAccountID: account, catalog: cat, configErr: configErr}
 }
@@ -381,31 +378,17 @@ func AuthoritativeProtocol(service string) (AWSProtocol, bool) {
 // authoritativeProtocolFor requires one unambiguous wire protocol among the
 // exact endpoint-prefix records. It deliberately does not consult aliases or
 // a hand-maintained service table.
-func authoritativeProtocolFor(c wireCatalog, service string) (AWSProtocol, bool) {
+func authoritativeProtocolFor(c *wireIndex, service string) (AWSProtocol, bool) {
 	if c == nil || service == "" {
 		return "", false
 	}
 	var found AWSProtocol
 	seen := map[AWSProtocol]bool{}
-	for _, s := range c.Services() {
-		if s.EndpointPrefix != service {
-			continue
-		}
-		if s.Protocol == "json" {
-			for _, o := range s.Operations {
-				p, ok := catalogProtocol(s.Protocol, o.Route.JSONVersion)
-				if !ok {
-					return "", false
-				}
-				seen[p] = true
-			}
-			continue
-		}
-		p, ok := catalogProtocol(s.Protocol, "")
-		if !ok {
+	for _, evidence := range c.authority[service] {
+		if !evidence.valid {
 			return "", false
 		}
-		seen[p] = true
+		seen[evidence.protocol] = true
 	}
 	if len(seen) != 1 {
 		return "", false
@@ -417,18 +400,14 @@ func authoritativeProtocolFor(c wireCatalog, service string) (AWSProtocol, bool)
 }
 
 func authoritativeProtocolForDefault(service string) (AWSProtocol, bool) {
-	c, err := iamlivecatalog.Load()
-	if err != nil {
-		return "", false
-	}
-	return authoritativeProtocolFor(c, service)
+	return authoritativeProtocolFor(defaultWireIndexOrNil(), service)
 }
 
 // validateModeledWireRoute checks the request envelope against the raw API
 // model before any target/action or body can establish operation identity.
 // JSON, Query, and EC2 Query models use their modeled HTTP route (normally
 // POST /); REST protocols intentionally use their operation-specific matcher.
-func validateModeledWireRoute(c wireCatalog, service string, protocol AWSProtocol, path, method string, q url.Values, targets []string) error {
+func validateModeledWireRoute(c *wireIndex, service string, protocol AWSProtocol, path, method string, q url.Values, targets []string) error {
 	if c == nil || service == "" || (protocol != ProtocolJSON10 && protocol != ProtocolJSON11 && protocol != ProtocolQuery && protocol != ProtocolEC2Query) {
 		return errors.New("wire route is unavailable")
 	}
@@ -457,39 +436,27 @@ func validateModeledWireRoute(c wireCatalog, service string, protocol AWSProtoco
 			selectedVersion = versions[0]
 		}
 	}
+	candidates := indexRouteCandidates(c, service, protocol, path, method)
 	matches := 0
-	for _, s := range c.Services() {
-		if s.EndpointPrefix != service {
+	for _, candidate := range candidates {
+		o := candidate.operation
+		if !validEvidenceService(service) || !validEvidenceOperation(o.Name) || o.Route.Method == "" || o.Route.URI == "" {
+			return errors.New("wire route model is malformed")
+		}
+		if !strings.EqualFold(o.Route.Method, method) {
 			continue
 		}
-		for _, o := range s.Operations {
-			wire, ok := catalogProtocol(s.Protocol, o.Route.JSONVersion)
-			if !ok || wire != protocol {
-				continue
-			}
-			if !validEvidenceService(o.Service) || !validEvidenceOperation(o.Name) || o.Route.Method == "" || o.Route.URI == "" {
-				return errors.New("wire route model is malformed")
-			}
-			routePath, routeQuery, foundQuery := strings.Cut(o.Route.URI, "?")
-			if routePath == "" {
-				routePath = "/"
-			}
-			fixed, queryOK := modeledWireQuery(routeQuery, foundQuery)
-			if !queryOK {
-				return errors.New("wire route model has malformed query placement")
-			}
-			if selectedName != "" && o.Name != selectedName {
-				continue
-			}
-			if selectedPrefix != "" && s.TargetPrefix != selectedPrefix {
-				continue
-			}
-			if selectedVersion != "" && s.APIVersion != selectedVersion {
-				continue
-			}
-			if routePath == path && strings.EqualFold(o.Route.Method, method) && wireQueryMatches(fixed, q, protocol) {
-				matches++
-			}
+		if selectedName != "" && o.Name != selectedName {
+			continue
+		}
+		if selectedPrefix != "" && candidate.targetPrefix != selectedPrefix {
+			continue
+		}
+		if selectedVersion != "" && candidate.apiVersion != selectedVersion {
+			continue
+		}
+		if wireQueryMatches(candidate.fixedQuery, q, protocol) {
+			matches++
 		}
 	}
 	if matches == 0 {
@@ -616,34 +583,18 @@ func safeHeaders(h http.Header) http.Header {
 	return o
 }
 
-func operationHasVariantTarget(c wireCatalog, service, operation, target string) bool {
+func operationHasVariantTarget(c *wireIndex, service, operation, protocol, target string) bool {
 	if c == nil {
 		return false
 	}
-	variants := map[string]bool{}
-	for _, s := range c.Services() {
-		if s.EndpointPrefix != service || s.TargetPrefix == target {
-			continue
-		}
-		for _, o := range s.Operations {
-			if o.Service == service && o.Name == operation {
-				variants[s.TargetPrefix] = true
-				break
-			}
-		}
-	}
-	return len(variants) > 0
+	return len(c.variants[jsonVariantKey{service, protocol, operation, target}]) > 0
 }
 
 func targetOperation(target, service string, max int) (string, error) {
-	c, err := iamlivecatalog.Load()
-	if err != nil {
-		return "", errors.New("JSON catalog is unavailable")
-	}
-	return targetOperationFor(target, service, "", c, max)
+	return targetOperationFor(target, service, "", defaultWireIndexOrNil(), max)
 }
 
-func targetOperationFor(target, service string, protocol AWSProtocol, c wireCatalog, max int) (string, error) {
+func targetOperationFor(target, service string, protocol AWSProtocol, c *wireIndex, max int) (string, error) {
 	if c == nil {
 		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
 	}
@@ -661,30 +612,29 @@ func targetOperationFor(target, service string, protocol AWSProtocol, c wireCata
 	if len(p) != 2 || p[0] == "" || p[1] == "" || !validOperation(p[1]) {
 		return "", errors.New("JSON target is malformed")
 	}
-	matches := 0
-	for _, s := range c.Services() {
-		if s.EndpointPrefix != service || s.TargetPrefix != p[0] {
-			continue
-		}
-		for _, o := range s.Operations {
-			wire, ok := catalogProtocol(s.Protocol, o.Route.JSONVersion)
-			if !ok || (protocol != "" && wire != protocol) {
-				continue
-			}
-			if o.Service == service && o.Name == p[1] && (o.Route.TargetPrefix == p[0] || operationHasVariantTarget(c, service, p[1], p[0])) {
-				matches++
-				if o.State != iamlivecatalog.EvidenceKnown && !operationHasVariantTarget(c, service, p[1], p[0]) {
-					return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
-				}
-			}
-		}
+	var candidates []wireCandidate
+	if protocol == "" {
+		candidates = append(candidates, c.json[jsonIndexKey{service, string(ProtocolJSON10), p[0], p[1]}]...)
+		candidates = append(candidates, c.json[jsonIndexKey{service, string(ProtocolJSON11), p[0], p[1]}]...)
+	} else {
+		candidates = c.json[jsonIndexKey{service, string(protocol), p[0], p[1]}]
 	}
-	if matches != 1 {
+	if len(candidates) != 1 {
+		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
+	}
+	candidate := candidates[0]
+	// Variant evidence is looked up by its complete key as a bounded ownership
+	// check. It never turns a record with a mismatched own target into an owner.
+	variantKey := jsonVariantKey{service, string(candidate.protocol), p[1], p[0]}
+	if len(c.variants[variantKey]) > 1 || candidate.operation.Route.TargetPrefix != p[0] {
+		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
+	}
+	if candidate.operation.State != iamlivecatalog.EvidenceKnown {
 		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
 	}
 	return p[1], nil
 }
-func decodeJSONBody(body []byte, h http.Header, service string, protocol AWSProtocol, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
+func decodeJSONBody(body []byte, h http.Header, service string, protocol AWSProtocol, c *wireIndex, l DecodeLimits) (string, map[string]Value, error) {
 	t := h.Values("X-Amz-Target")
 	if len(t) != 1 {
 		return "", nil, errors.New("JSON operation target is missing or duplicated")

@@ -54,7 +54,16 @@ func stsRequest(body io.ReadCloser) (*http.Request, *VerifiedRequest) {
 
 type testWireCatalog struct{ services []iamlivecatalog.Service }
 
-func (c testWireCatalog) Services() []iamlivecatalog.Service { return c.services }
+func (c testWireCatalog) WireServices() []iamlivecatalog.WireService {
+	out := make([]iamlivecatalog.WireService, len(c.services))
+	for i, service := range c.services {
+		out[i] = iamlivecatalog.WireService{EndpointPrefix: service.EndpointPrefix, APIVersion: service.APIVersion, TargetPrefix: service.TargetPrefix, Protocol: service.Protocol}
+		for _, operation := range service.Operations {
+			out[i].Operations = append(out[i].Operations, iamlivecatalog.WireOperation{Name: operation.Name, State: operation.State, Route: operation.Route, QueryBindings: operation.QueryBindings})
+		}
+	}
+	return out
+}
 
 func jsonTestCatalog(state iamlivecatalog.EvidenceState, ownTarget string) testWireCatalog {
 	return testWireCatalog{services: []iamlivecatalog.Service{{
@@ -64,7 +73,11 @@ func jsonTestCatalog(state iamlivecatalog.EvidenceState, ownTarget string) testW
 }
 
 func TestModeledRESTDisambiguatesS3AndKeepsLogsCreateDelivery(t *testing.T) {
-	c, err := iamlivecatalog.Load()
+	catalog, err := iamlivecatalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := buildWireIndex(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,17 +100,29 @@ func TestJSONCatalogRequiresExactKnownOwnTarget(t *testing.T) {
 		"mismatched own target":   jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20111205"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, cat, 4096); err == nil {
+			idx, err := buildWireIndex(cat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, idx, 4096); err == nil {
 				t.Fatal("contradictory or non-exact operation evidence was accepted")
 			}
 		})
 	}
-	if got, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20120810"), 4096); err != nil || got != "GetItem" {
+	known, err := buildWireIndex(jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20120810"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, known, 4096); err != nil || got != "GetItem" {
 		t.Fatalf("exact operation evidence rejected: %q %v", got, err)
 	}
 	duplicate := jsonTestCatalog(iamlivecatalog.EvidenceKnown, "DynamoDB_20120810")
 	duplicate.services[0].Operations = append(duplicate.services[0].Operations, duplicate.services[0].Operations[0])
-	if _, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, duplicate, 4096); err == nil {
+	duplicateIndex, err := buildWireIndex(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := targetOperationFor("DynamoDB_20120810.GetItem", "dynamodb", ProtocolJSON10, duplicateIndex, 4096); err == nil {
 		t.Fatal("duplicate raw operation evidence was accepted")
 	}
 }

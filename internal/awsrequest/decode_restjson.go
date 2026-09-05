@@ -12,7 +12,7 @@ import (
 	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
-func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
+func decodeRESTJSONBody(body []byte, service, path, method string, q url.Values, c *wireIndex, l DecodeLimits) (string, map[string]Value, error) {
 	op, route, e := restOperationFromCatalog(service, path, method, q, ProtocolRESTJSON, c, l)
 	if e != nil {
 		return "", nil, e
@@ -48,14 +48,6 @@ func restOperation(service, path, method string, q url.Values, l DecodeLimits) (
 	return restOperationFromCatalog(service, path, method, q, ProtocolRESTJSON, defaultWireCatalog(), l)
 }
 
-func defaultWireCatalog() wireCatalog {
-	c, err := iamlivecatalog.Load()
-	if err != nil {
-		return nil
-	}
-	return c
-}
-
 // MatchRESTRoute reports whether a request matches a modeled REST route and
 // returns the path parameters captured from the route. It rejects unknown
 // query parameters and requires every modeled required query member.
@@ -85,7 +77,7 @@ func MatchRESTRoute(
 // restOperationFromCatalog matches only raw, exact service operation records.
 // It intentionally does not use Catalog.Operation, whose normalized index is
 // allowed to collapse equivalent records and resolve aliases.
-func restOperationFromCatalog(service, path, method string, q url.Values, protocol AWSProtocol, c wireCatalog, l DecodeLimits) (string, map[string]Value, error) {
+func restOperationFromCatalog(service, path, method string, q url.Values, protocol AWSProtocol, c *wireIndex, l DecodeLimits) (string, map[string]Value, error) {
 	if len(path) > l.MaxPathBytes || !strings.HasPrefix(path, "/") {
 		return "", nil, errors.New("REST path is malformed")
 	}
@@ -93,36 +85,33 @@ func restOperationFromCatalog(service, path, method string, q url.Values, protoc
 		return "", nil, e
 	}
 	method = strings.ToUpper(method)
+	if c == nil {
+		return "", nil, errors.New("REST operation is unavailable")
+	}
+	candidates := c.rest[restIndexKey{service, string(protocol), method, ""}]
 	matches := 0
 	var operation string
 	var params map[string]Value
-	if c != nil {
-		for _, s := range c.Services() {
-			if s.EndpointPrefix != service {
-				continue
-			}
-			wire, ok := catalogProtocol(s.Protocol, "")
-			if !ok || wire != protocol {
-				continue
-			}
-			for _, o := range s.Operations {
-				if o.Service != service || !validEvidenceService(o.Service) || !validEvidenceOperation(o.Name) || o.Route.Method != method {
-					continue
-				}
-				candidate, ok, err := MatchRESTRoute(o.Route.URI, path, q, o.QueryBindings, l)
-				if err != nil {
-					return "", nil, err
-				}
-				if !ok {
-					continue
-				}
-				matches++
-				if o.State != iamlivecatalog.EvidenceKnown {
-					return "", nil, errors.New("REST operation is contradictory or unsupported")
-				}
-				operation, params = o.Name, candidate
-			}
+	for _, candidate := range candidates {
+		o := candidate.operation
+		if !validEvidenceService(service) || !validEvidenceOperation(o.Name) || o.Route.Method == "" || o.Route.URI == "" {
+			return "", nil, errors.New("REST catalog route is malformed")
 		}
+		if !strings.EqualFold(o.Route.Method, method) {
+			continue
+		}
+		candidateParams, ok, matchErr := matchRESTURI(candidate.routePath, path, q, l)
+		if matchErr != nil {
+			return "", nil, matchErr
+		}
+		if !ok || !wireQueryValuesMatch(candidate.fixedQuery, q) || !matchRESTQueryBindingsFixed(candidate.fixedQuery, o.QueryBindings, q, l) {
+			continue
+		}
+		matches++
+		if o.State != iamlivecatalog.EvidenceKnown {
+			return "", nil, errors.New("REST operation is contradictory or unsupported")
+		}
+		operation, params = o.Name, candidateParams
 	}
 	if matches == 0 {
 		return "", nil, errors.New("unknown REST operation")
@@ -223,19 +212,29 @@ func matchRESTURI(uri, requestPath string, q url.Values, l DecodeLimits) (map[st
 // from operation names or treating every query parameter as a wildcard. An
 // operation's required query members must be present, and every supplied
 // non-routing query name must be modeled by that operation.
-func matchRESTQueryBindings(uri string, bindings []iamlivecatalog.QueryBinding, q url.Values, l DecodeLimits) bool {
-	fixed := map[string]bool{}
-	_, query, _ := strings.Cut(uri, "?")
-	if query != "" {
-		for _, field := range strings.Split(query, "&") {
-			parts := strings.SplitN(field, "=", 2)
-			key, err := url.QueryUnescape(parts[0])
-			if err != nil || key == "" || len(key) > l.MaxTokenBytes {
-				return false
-			}
-			fixed[key] = true
+func wireQueryValuesMatch(fixed, actual url.Values) bool {
+	for key, want := range fixed {
+		if got, ok := actual[key]; !ok || !reflect.DeepEqual(got, want) {
+			return false
 		}
 	}
+	return true
+}
+
+func matchRESTQueryBindings(uri string, bindings []iamlivecatalog.QueryBinding, q url.Values, l DecodeLimits) bool {
+	fixed := url.Values{}
+	_, query, present := strings.Cut(uri, "?")
+	if present {
+		var ok bool
+		fixed, ok = modeledWireQuery(query, true)
+		if !ok {
+			return false
+		}
+	}
+	return matchRESTQueryBindingsFixed(fixed, bindings, q, l)
+}
+
+func matchRESTQueryBindingsFixed(fixed url.Values, bindings []iamlivecatalog.QueryBinding, q url.Values, l DecodeLimits) bool {
 	modeled := map[string]iamlivecatalog.QueryBinding{}
 	for _, binding := range bindings {
 		if binding.LocationName == "" || len(binding.LocationName) > l.MaxTokenBytes {
@@ -247,7 +246,7 @@ func matchRESTQueryBindings(uri string, bindings []iamlivecatalog.QueryBinding, 
 		modeled[binding.LocationName] = binding
 	}
 	for key := range q {
-		if !fixed[key] {
+		if _, isFixed := fixed[key]; !isFixed {
 			if _, ok := modeled[key]; !ok {
 				return false
 			}
