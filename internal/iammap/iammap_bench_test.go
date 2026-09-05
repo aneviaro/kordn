@@ -2,6 +2,7 @@ package iammap
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
@@ -47,6 +48,7 @@ func BenchmarkMapping(b *testing.B) {
 		Partition: "aws", EndpointHost: "dynamodb.us-east-1.amazonaws.com", Service: "dynamodb", Region: "us-east-1",
 		CallerAccountID: "123456789012", Protocol: protocol, Operation: "GetItem", Method: "POST", CanonicalPath: "/",
 		Parameters:      map[string]awsrequest.Value{"TableName": {Kind: awsrequest.ValueString, String: "bench-table"}},
+		Headers:         http.Header{"X-Amz-Target": []string{"DynamoDB_20120810.GetItem"}},
 		PayloadHashMode: awsrequest.PayloadHashSHA256,
 	}
 	b.ReportAllocs()
