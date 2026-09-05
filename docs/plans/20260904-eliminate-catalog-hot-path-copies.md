@@ -94,13 +94,13 @@ Files:
 - Test: `internal/iamlivecatalog/catalog_test.go` — verify cardinality, exact version retention, occurrence retention, and output immutability.
 
 Steps:
-- [ ] Add a compact `WireService`/`WireOperation` representation containing only endpoint prefix, API version, protocol/JSON metadata, target prefix, operation name/state, route, and copied query bindings; exclude mappings and IAM definitions.
-- [ ] Add an unexported raw operation occurrence index keyed by normalized endpoint prefix and operation name. Store positions or equivalent immutable references to every `c.services[service].Operations[operation]` occurrence rather than values from the normalized/deduplicating `c.operations` index.
-- [ ] Build the compact wire snapshot and occurrence index once at the end of `parse()`, after contradictory states and mappings have been attached. Pre-size maps and slices from known catalog cardinalities.
-- [ ] Expose a defensive wire snapshot method for decoder initialization and an exact occurrence-selector method for adapter lookup. Clone only returned compact records or selected operations; never expose catalog-owned slices, maps, or condition pointers.
-- [ ] Preserve deterministic ordering from sorted API paths, service order, and per-service operation order so duplicate counts and error outcomes do not depend on map iteration.
-- [ ] Add tests showing repeated API-version records remain distinct, duplicate evidence is returned with the original multiplicity, unknown keys return zero candidates, and mutations to every returned slice/map/condition cannot affect later reads.
-- [ ] Add a same-package cardinality assertion that the occurrence index contains exactly one entry for every operation held under `c.services`, including records that normalized lookup marks contradictory.
+- [x] Add a compact `WireService`/`WireOperation` representation containing only endpoint prefix, API version, protocol/JSON metadata, target prefix, operation name/state, route, and copied query bindings; exclude mappings and IAM definitions.
+- [x] Add an unexported raw operation occurrence index keyed by normalized endpoint prefix and operation name. Store positions or equivalent immutable references to every `c.services[service].Operations[operation]` occurrence rather than values from the normalized/deduplicating `c.operations` index.
+- [x] Build the compact wire snapshot and occurrence index once at the end of `parse()`, after contradictory states and mappings have been attached. Pre-size maps and slices from known catalog cardinalities.
+- [x] Expose a defensive wire snapshot method for decoder initialization and an exact occurrence-selector method for adapter lookup. Clone only returned compact records or selected operations; never expose catalog-owned slices, maps, or condition pointers.
+- [x] Preserve deterministic ordering from sorted API paths, service order, and per-service operation order so duplicate counts and error outcomes do not depend on map iteration.
+- [x] Add tests showing repeated API-version records remain distinct, duplicate evidence is returned with the original multiplicity, unknown keys return zero candidates, and mutations to every returned slice/map/condition cannot affect later reads.
+- [x] Add a same-package cardinality assertion that the occurrence index contains exactly one entry for every operation held under `c.services`, including records that normalized lookup marks contradictory.
 
 Verification:
 - `./scripts/init-iamlive-submodule.sh --check`
