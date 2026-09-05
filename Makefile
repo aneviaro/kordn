@@ -6,7 +6,7 @@ export GOPROXY := off
 export GOSUMDB := off
 GO_FILES := $(shell find cmd internal test -type f -name '*.go' 2>/dev/null)
 
-.PHONY: all iamlive-init iamlive-check fmt fmt-check lint test test-race license license-check schema schema-check checklist-validation build test-integration compatibility-check test-compatibility strict-compatibility test-external build-matrix benchmark fuzz-smoke strict-performance soak-leak soak-leak-race security-check release-snapshot ci clean
+.PHONY: all iamlive-init iamlive-check fmt fmt-check lint test test-race license license-check schema schema-check checklist-validation build test-integration compatibility-check test-compatibility strict-compatibility test-external build-matrix benchmark benchmark-hotpath fuzz-smoke strict-performance soak-leak soak-leak-race security-check release-snapshot ci clean
 
 all: build
 
@@ -166,6 +166,12 @@ build-matrix: iamlive-check
 # benchmark by shortening or selectively filtering it.
 benchmark: iamlive-check
 	$(GO) test -run '^$$' -bench=. -benchmem ./...
+
+# Keep the focused hot-path smoke suite separate from the complete benchmark
+# target: these names are the local regression surface for catalog work.
+benchmark-hotpath: iamlive-check
+	$(GO) test -run '^$$' -bench='^(BenchmarkDecodeQuery|BenchmarkDecodeJSON|BenchmarkWireIndexLookupQueryExact|BenchmarkWireIndexLookupQueryNegative|BenchmarkWireIndexLookupQueryAmbiguous|BenchmarkWireIndexLookupJSONExact|BenchmarkWireIndexLookupJSONAmbiguous)$$' -benchmem ./internal/awsrequest
+	$(GO) test -run '^$$' -bench='^BenchmarkLookupRequest$$' -benchmem ./internal/iammap
 
 # Exercise every checked-in fuzz target briefly without downloading a corpus.
 # Fuzzing is deterministic and offline when the module cache is already

@@ -55,6 +55,8 @@ jobs:
       # schema tests, so do not run those suites a second time.
       - name: Tests
         run: make test-race
+      - name: Catalog hot-path benchmarks
+        run: make benchmark-hotpath
       - name: License gate
         run: make license-check
       - name: Build
