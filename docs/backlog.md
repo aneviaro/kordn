@@ -232,19 +232,27 @@ local `kordn run` process, not a separate daemon or network control plane.
 
 ## Refactor catalog-backed IAM mapping validation and dependency evaluation
 
-The catalog-backed IAM mapper currently mixes catalog validation, wire lookup,
-mapping-graph evaluation, and request-dependent dependency extraction. It also
-performs repeated catalog scans/copies and uses string-based disagreement checks,
-boolean certainty, and positional bookkeeping that make correctness and
-performance difficult to reason about.
+The catalog-backed IAM mapper still mixes catalog validation, wire lookup,
+mapping-graph evaluation, and request-dependent dependency extraction. Hot-path
+indexes removed repeated request-time catalog scans and copies, but the strict
+reference run still reported 322.8 MiB RSS against the 80 MiB ordinary-process
+budget. Retained catalog representations, string-based disagreement checks,
+boolean certainty, and positional bookkeeping make correctness and memory use
+difficult to reason about.
 
 ### Desired behavior
 
-- Build an internal, reusable catalog index so request mapping does not clone or
-  scan the complete catalog for every request.
+- Store pinned API, mapping, and IAM-definition evidence in a compact resident
+  representation without retaining duplicate catalog-wide wire and mapping
+  graphs after initialization.
+- Keep request decoding and mapping on the existing immutable indexes; reducing
+  RSS must not reintroduce catalog-scale request work, mutable shared state, or
+  request-path locks.
 - Centralize static validation of API models, `map.json`, and IAM definitions at
   catalog-load time while retaining fail-closed behavior for missing,
   contradictory, ambiguous, or incomplete evidence.
+- Preserve defensive-copy public catalog APIs and every raw evidence occurrence,
+  including duplicate API versions, mappings, resources, and dependencies.
 - Represent dependent-action occurrences explicitly with tri-state
   applicability. Preserve duplicate and proven-inapplicable occurrences, and
   reject unknown applicability rather than guessing.
@@ -254,17 +262,24 @@ performance difficult to reason about.
 - Preserve exact Query/EC2 Query version matching, modeled JSON protocol/target
   checks, REST route and query-binding checks, and all existing endpoint and
   non-AWS interception boundaries.
+- Keep the pinned source hash, offline build, single-binary/process architecture,
+  and catalog provenance unchanged; do not add lazy network loading or a daemon.
 - Ensure request cancellation stops mapping work instead of leaving timed-out
   work running in the background.
 
 ### Acceptance criteria
 
-- Normal mapping requests use indexed catalog data and avoid repeated full
-  catalog cloning/scanning.
+- `KORDN_STRICT_PERFORMANCE=1 make strict-performance` stays within the 80 MiB
+  ordinary RSS budget while retaining the Section 21 latency and throughput
+  thresholds.
+- `KORDN_STRICT_PERFORMANCE=1 make strict-compatibility` stays within the 150 MiB
+  compatibility RSS budget.
+- Normal mapping requests continue to use indexed catalog data and avoid
+  repeated full catalog cloning/scanning.
 - Static catalog inconsistencies are detected once with actionable diagnostics;
   no inconsistent mapping is forwarded or authorized.
 - Dependency validation compares exact action/resource occurrence multisets and
   retains current conditional-dependency fail-closed semantics.
-- Existing golden, ambiguity, malformed-input, fuzz, timeout, and fail-closed
-  tests continue to pass, with benchmarks covering lookup, mapping, and
-  allocations.
+- Existing golden, ambiguity, malformed-input, fuzz, timeout, allocation, and
+  fail-closed tests continue to pass, and the strict performance source files
+  and thresholds remain unchanged.
