@@ -24,14 +24,16 @@ const (
 )
 
 type Catalog struct {
-	version        string
-	sourceHash     string
-	services       []Service
-	serviceIndex   map[string][]int
-	operations     map[string][]indexedOperation
-	actions        map[string][]ActionDefinition
-	mappings       map[string][]ActionMapping
-	permissionless map[string]bool
+	version              string
+	sourceHash           string
+	services             []Service
+	serviceIndex         map[string][]int
+	operations           map[string][]indexedOperation
+	operationOccurrences map[string][]operationPosition
+	wireServices         []WireService
+	actions              map[string][]ActionDefinition
+	mappings             map[string][]ActionMapping
+	permissionless       map[string]bool
 }
 
 type indexedOperation struct {
@@ -45,6 +47,36 @@ type Service struct {
 	Protocol                                                       string
 	Aliases                                                        []string
 	Operations                                                     []Operation
+}
+
+// WireService is the catalog's compact, mapping-free representation of one
+// API model. Its operation list contains only evidence needed to identify a
+// wire request; IAM mappings and definitions are intentionally excluded.
+type WireService struct {
+	EndpointPrefix, APIVersion, TargetPrefix string
+	Protocols                                []string
+	Protocol                                 string
+	Operations                               []WireOperation
+}
+
+// WireOperation is compact wire evidence for one operation occurrence.
+type WireOperation struct {
+	Name          string
+	State         EvidenceState
+	Route         Route
+	QueryBindings []QueryBinding
+}
+
+// OperationOccurrence identifies one concrete service-model operation and
+// retains its complete operation evidence for mapping consumers.
+type OperationOccurrence struct {
+	Service   WireService
+	Operation Operation
+}
+
+type operationPosition struct {
+	serviceIndex   int
+	operationIndex int
 }
 
 type Operation struct {
@@ -109,7 +141,20 @@ type ResourceType struct {
 // needed by the neutral index. Callers receive a defensive copy.
 type RawMapping map[string]json.RawMessage
 
-func cloneStrings(in []string) []string { return append([]string(nil), in...) }
+func cloneStrings(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	return append([]string{}, in...)
+}
+
+func cloneQueryBindings(in []QueryBinding) []QueryBinding {
+	if in == nil {
+		return nil
+	}
+	return append([]QueryBinding{}, in...)
+}
+
 func (s Service) Clone() Service {
 	s.Protocols = cloneStrings(s.Protocols)
 	s.Aliases = cloneStrings(s.Aliases)
@@ -117,18 +162,58 @@ func (s Service) Clone() Service {
 	return s
 }
 func cloneOperations(in []Operation) []Operation {
+	if in == nil {
+		return nil
+	}
 	out := make([]Operation, len(in))
 	for i := range in {
 		out[i] = in[i].Clone()
 	}
 	return out
 }
+
+func cloneWireOperations(in []WireOperation) []WireOperation {
+	if in == nil {
+		return nil
+	}
+	out := make([]WireOperation, len(in))
+	for i := range in {
+		out[i] = in[i].Clone()
+	}
+	return out
+}
+
+// Clone returns an isolated copy of the wire service and all of its wire
+// operation evidence.
+func (s WireService) Clone() WireService {
+	s.Protocols = cloneStrings(s.Protocols)
+	s.Operations = cloneWireOperations(s.Operations)
+	return s
+}
+
+// Clone returns an isolated copy of the wire operation and its query
+// bindings.
+func (o WireOperation) Clone() WireOperation {
+	o.QueryBindings = cloneQueryBindings(o.QueryBindings)
+	return o
+}
+
+// Clone returns an isolated copy of the operation occurrence, including its
+// complete selected operation evidence.
+func (o OperationOccurrence) Clone() OperationOccurrence {
+	o.Service = o.Service.Clone()
+	o.Operation = o.Operation.Clone()
+	return o
+}
 func (o Operation) Clone() Operation {
-	o.QueryBindings = append([]QueryBinding(nil), o.QueryBindings...)
+	o.QueryBindings = cloneQueryBindings(o.QueryBindings)
 	o.Mappings = cloneMappings(o.Mappings)
 	return o
 }
 func cloneMappings(in []ActionMapping) []ActionMapping {
+	if in == nil {
+		return nil
+	}
 	out := make([]ActionMapping, len(in))
 	for i := range in {
 		out[i] = in[i].Clone()

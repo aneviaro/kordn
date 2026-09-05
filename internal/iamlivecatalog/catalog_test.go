@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -244,6 +245,135 @@ func TestCatalogPreservesAbsentAndContradictoryMappingEvidence(t *testing.T) {
 	}
 	if !foundContradictory {
 		t.Fatalf("contradictory action mapping was not retained: %+v", contradictoryOp.Mappings)
+	}
+}
+
+func TestWireOccurrenceIndexPreservesCatalogCardinality(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 0
+	for serviceIndex, service := range c.services {
+		want += len(service.Operations)
+		for operationIndex, operation := range service.Operations {
+			key := operationKey(service.EndpointPrefix, operation.Name)
+			positions := c.operationOccurrences[key]
+			found := false
+			for _, position := range positions {
+				if position.serviceIndex == serviceIndex && position.operationIndex == operationIndex {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("operation %s/%s missing from occurrence index", service.EndpointPrefix, operation.Name)
+			}
+		}
+	}
+	got := 0
+	for key, positions := range c.operationOccurrences {
+		if len(positions) == 0 {
+			t.Fatalf("occurrence index has empty bucket %q", key)
+		}
+		got += len(positions)
+	}
+	if got != want {
+		t.Fatalf("occurrence index cardinality = %d, want %d", got, want)
+	}
+}
+
+func TestWireOccurrenceSelectorsPreserveVersionsAndAreImmutable(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var duplicateKey string
+	var versions map[string]bool
+	for key, positions := range c.operationOccurrences {
+		if len(positions) < 2 {
+			continue
+		}
+		candidateVersions := map[string]bool{}
+		for _, position := range positions {
+			candidateVersions[c.services[position.serviceIndex].APIVersion] = true
+		}
+		if len(candidateVersions) > 1 {
+			duplicateKey, versions = key, candidateVersions
+			break
+		}
+	}
+	if duplicateKey == "" {
+		t.Fatal("catalog has no repeated operation across API versions")
+	}
+	parts := strings.SplitN(duplicateKey, "\x00", 2)
+	occurrences := c.OperationOccurrences(parts[0], parts[1])
+	if len(occurrences) != len(c.operationOccurrences[duplicateKey]) {
+		t.Fatalf("occurrence selector cardinality = %d, want %d", len(occurrences), len(c.operationOccurrences[duplicateKey]))
+	}
+	seenVersions := map[string]bool{}
+	for _, occurrence := range occurrences {
+		seenVersions[occurrence.Service.APIVersion] = true
+	}
+	if !reflect.DeepEqual(seenVersions, versions) {
+		t.Fatalf("occurrence API versions = %v, want %v", seenVersions, versions)
+	}
+	if got := c.OperationOccurrences("unknown-endpoint", "unknown-operation"); len(got) != 0 {
+		t.Fatalf("unknown occurrence key returned %d candidates", len(got))
+	}
+
+	wire := c.WireServices()
+	if len(wire) == 0 || len(wire[0].Operations) == 0 {
+		t.Fatal("wire snapshot is empty")
+	}
+	wireWant := wire[0].Clone()
+	wire[0].Protocols = append(wire[0].Protocols, "mutated")
+	wire[0].Operations[0].QueryBindings = append(wire[0].Operations[0].QueryBindings, QueryBinding{Member: "mutated"})
+	wire[0].Operations = append(wire[0].Operations, WireOperation{Name: "mutated"})
+	wireAgain := c.WireServices()
+	if !reflect.DeepEqual(wireAgain[0], wireWant) {
+		t.Fatal("wire snapshot output aliases catalog storage")
+	}
+
+	// Lambda CreateFunction has nested mapping maps and conditions in the pinned
+	// catalog, making it a compact check that the selected full operation is
+	// isolated at every mutable level.
+	selected := c.OperationOccurrences("lambda", "CreateFunction")
+	if len(selected) == 0 {
+		t.Fatal("expected Lambda CreateFunction occurrence")
+	}
+	occurrenceWant := selected[0].Clone()
+	selected[0].Service.Protocols = append(selected[0].Service.Protocols, "mutated")
+	op := &selected[0].Operation
+	op.QueryBindings = append(op.QueryBindings, QueryBinding{Member: "mutated"})
+	for i := range op.Mappings {
+		mapping := &op.Mappings[i]
+		mapping.ResourceARNMappings["mutated"] = "mutated"
+		mapping.ConditionMappings["mutated"] = ResourceMapping{Condition: &Condition{LHS: "mutated"}}
+		mapping.Resources = append(mapping.Resources, ResourceMapping{Condition: &Condition{LHS: "mutated"}})
+		if mapping.Condition != nil {
+			mapping.Condition.LHS = "mutated"
+			if mapping.Condition.And != nil {
+				mapping.Condition.And.RHS = "mutated"
+			}
+		}
+		for j := range mapping.Resources {
+			if mapping.Resources[j].Condition != nil {
+				mapping.Resources[j].Condition.RHS = "mutated"
+			}
+		}
+		for key := range mapping.ConditionMappings {
+			if mapping.ConditionMappings[key].Condition != nil {
+				value := mapping.ConditionMappings[key]
+				value.Condition.Op = "mutated"
+				mapping.ConditionMappings[key] = value
+			}
+		}
+	}
+	fresh := c.OperationOccurrences("lambda", "CreateFunction")
+	if len(fresh) != len(selected) || !reflect.DeepEqual(fresh[0], occurrenceWant) {
+		t.Fatal("selected operation output aliases catalog storage")
 	}
 }
 

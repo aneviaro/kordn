@@ -72,6 +72,47 @@ func (c *Catalog) Services() []Service {
 	}
 	return out
 }
+
+// WireServices returns an isolated snapshot containing only the wire evidence
+// for every API model. It does not copy operation mappings or IAM definitions.
+func (c *Catalog) WireServices() []WireService {
+	if c == nil {
+		return nil
+	}
+	out := make([]WireService, len(c.wireServices))
+	for i := range c.wireServices {
+		out[i] = c.wireServices[i].Clone()
+	}
+	return out
+}
+
+// OperationOccurrences returns every concrete operation occurrence for the
+// normalized endpoint prefix and operation name, in catalog construction
+// order. Each selected operation is deeply copied before it is returned.
+func (c *Catalog) OperationOccurrences(service, operation string) []OperationOccurrence {
+	if c == nil {
+		return nil
+	}
+	positions := c.operationOccurrences[operationKey(service, operation)]
+	if len(positions) == 0 {
+		return nil
+	}
+	out := make([]OperationOccurrence, len(positions))
+	for i, position := range positions {
+		s := c.services[position.serviceIndex]
+		out[i] = OperationOccurrence{
+			Service: WireService{
+				EndpointPrefix: s.EndpointPrefix,
+				APIVersion:     s.APIVersion,
+				TargetPrefix:   s.TargetPrefix,
+				Protocols:      cloneStrings(s.Protocols),
+				Protocol:       s.Protocol,
+			},
+			Operation: s.Operations[position.operationIndex].Clone(),
+		}
+	}
+	return out
+}
 func (c *Catalog) Service(name string) (Service, error) {
 	if c == nil {
 		return Service{}, errors.New("catalog unavailable")
@@ -334,8 +375,47 @@ func parse() (*Catalog, error) {
 			cat.replaceOperation(i, *o)
 		}
 	}
+	cat.buildWireIndexes()
 	cat.sourceHash = hex.EncodeToString(h.Sum(nil))
 	return cat, nil
+}
+
+func (c *Catalog) buildWireIndexes() {
+	c.wireServices = make([]WireService, len(c.services))
+	counts := make(map[string]int, len(c.operations))
+	for _, service := range c.services {
+		for _, operation := range service.Operations {
+			counts[operationKey(service.EndpointPrefix, operation.Name)]++
+		}
+	}
+	c.operationOccurrences = make(map[string][]operationPosition, len(counts))
+	for key, count := range counts {
+		c.operationOccurrences[key] = make([]operationPosition, 0, count)
+	}
+	for serviceIndex, service := range c.services {
+		wire := WireService{
+			EndpointPrefix: service.EndpointPrefix,
+			APIVersion:     service.APIVersion,
+			TargetPrefix:   service.TargetPrefix,
+			Protocols:      cloneStrings(service.Protocols),
+			Protocol:       service.Protocol,
+			Operations:     make([]WireOperation, len(service.Operations)),
+		}
+		for operationIndex, operation := range service.Operations {
+			wire.Operations[operationIndex] = WireOperation{
+				Name:          operation.Name,
+				State:         operation.State,
+				Route:         operation.Route,
+				QueryBindings: cloneQueryBindings(operation.QueryBindings),
+			}
+			key := operationKey(service.EndpointPrefix, operation.Name)
+			c.operationOccurrences[key] = append(c.operationOccurrences[key], operationPosition{
+				serviceIndex:   serviceIndex,
+				operationIndex: operationIndex,
+			})
+		}
+		c.wireServices[serviceIndex] = wire
+	}
 }
 
 type rawAPI struct {
