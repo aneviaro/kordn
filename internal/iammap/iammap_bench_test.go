@@ -5,7 +5,37 @@ import (
 	"testing"
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
+	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 )
+
+var (
+	benchmarkLookupResult iamliveadapter.LookupResult
+	benchmarkLookupErr    error
+)
+
+func BenchmarkLookupRequest(b *testing.B) {
+	adapter, err := iamliveadapter.New()
+	if err != nil {
+		b.Fatal(err)
+	}
+	identity := iamliveadapter.WireIdentity{
+		Protocol: awsrequest.ProtocolJSON10,
+		Method:   "POST",
+		Path:     "/",
+		Target:   "DynamoDB_20120810.GetItem",
+	}
+	parameters := map[string]awsrequest.Value{"TableName": {Kind: awsrequest.ValueString, String: "bench-table-0"}}
+	tableNames := []string{"bench-table-0", "bench-table-1", "bench-table-2", "bench-table-3"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; b.Loop(); iteration++ {
+		parameters["TableName"] = awsrequest.Value{Kind: awsrequest.ValueString, String: tableNames[iteration%len(tableNames)]}
+		benchmarkLookupResult, benchmarkLookupErr = adapter.LookupRequest("dynamodb", "GetItem", identity, parameters)
+		if benchmarkLookupErr != nil {
+			b.Fatal(benchmarkLookupErr)
+		}
+	}
+}
 
 func BenchmarkMapping(b *testing.B) {
 	mapper, err := NewMapper()
