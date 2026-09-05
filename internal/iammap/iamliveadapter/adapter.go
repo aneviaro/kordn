@@ -37,7 +37,16 @@ type LookupResult struct {
 	Dependencies        []DependencyCandidate
 	DependenciesCertain bool
 }
-type Adapter struct{ catalog *iamlivecatalog.Catalog }
+
+// catalogDependency is the immutable, narrow catalog view needed by this
+// consumer. OperationOccurrences returns defensive operation copies and Action
+// returns defensive definition copies at the catalog boundary.
+type catalogDependency interface {
+	OperationOccurrences(string, string) []iamlivecatalog.OperationOccurrence
+	Action(string) (iamlivecatalog.ActionDefinition, error)
+}
+
+type Adapter struct{ catalog catalogDependency }
 
 // WireIdentity is the portion of an authenticated request which selects an
 // API model record. It intentionally contains no body or credential data.
@@ -54,7 +63,7 @@ func New() (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Adapter{catalog: c}, nil
+	return &Adapter{catalog: catalogDependency(c)}, nil
 }
 
 func NormalizeOperation(operation string) string {
@@ -80,24 +89,23 @@ func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity
 	if op == "" || !identity.Protocol.Supported() || strings.TrimSpace(identity.Method) == "" || identity.Path == "" {
 		return LookupResult{}, fmt.Errorf("incomplete wire identity")
 	}
-	var selected []iamlivecatalog.Operation
-	for _, serviceModel := range a.catalog.Services() {
-		if !strings.EqualFold(serviceModel.EndpointPrefix, service) {
+	occurrences := a.catalog.OperationOccurrences(service, op)
+	selected := make([]iamlivecatalog.Operation, 0, len(occurrences))
+	for _, occurrence := range occurrences {
+		record := occurrence.Operation
+		if record.State != iamlivecatalog.EvidenceKnown {
 			continue
 		}
-		for _, record := range serviceModel.Operations {
-			if !strings.EqualFold(record.Name, op) || record.State != iamlivecatalog.EvidenceKnown {
-				continue
-			}
-			protocol, ok := recordProtocol(serviceModel.Protocol, record.Route.JSONVersion)
-			if !ok || protocol != identity.Protocol {
-				continue
-			}
-			if !routeMatches(record, serviceModel, op, identity) {
-				continue
-			}
-			selected = append(selected, record)
+		protocol, ok := recordProtocol(occurrence.Service.Protocol, record.Route.JSONVersion)
+		if !ok || protocol != identity.Protocol {
+			continue
 		}
+		if !routeMatches(record, occurrence.Service, op, identity) {
+			continue
+		}
+		// OperationOccurrences already deep-copies the selected evidence. Keep
+		// only matching records so request work remains bounded to this bucket.
+		selected = append(selected, record)
 	}
 	if len(selected) != 1 {
 		if len(selected) == 0 {
@@ -129,7 +137,7 @@ func recordProtocol(protocol, version string) (awsrequest.AWSProtocol, bool) {
 	return "", false
 }
 
-func routeMatches(record iamlivecatalog.Operation, service iamlivecatalog.Service, operation string, id WireIdentity) bool {
+func routeMatches(record iamlivecatalog.Operation, service iamlivecatalog.WireService, operation string, id WireIdentity) bool {
 	if !strings.EqualFold(record.Route.Method, id.Method) {
 		return false
 	}
@@ -186,25 +194,18 @@ func (a *Adapter) Lookup(service, operation string, parameters ...map[string]aws
 	if op == "" {
 		return LookupResult{}, fmt.Errorf("unknown operation")
 	}
-	var records []iamlivecatalog.Operation
-	for _, s := range a.catalog.Services() {
-		if !strings.EqualFold(s.EndpointPrefix, service) {
-			continue
-		}
-		for _, o := range s.Operations {
-			if strings.EqualFold(o.Name, op) {
-				records = append(records, o)
-			}
-		}
+	occurrences := a.catalog.OperationOccurrences(service, op)
+	if len(occurrences) == 0 {
+		return LookupResult{}, fmt.Errorf("unknown operation")
 	}
-	if len(records) != 1 {
+	if len(occurrences) > 1 {
 		return LookupResult{}, fmt.Errorf("ambiguous operation")
 	}
 	var p map[string]awsrequest.Value
 	if len(parameters) == 1 {
 		p = parameters[0]
 	}
-	return a.lookupOperation(service, records[0], p)
+	return a.lookupOperation(service, occurrences[0].Operation, p)
 }
 
 type mappingRecord struct {

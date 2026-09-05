@@ -172,13 +172,13 @@ Files:
 - Modify: `internal/iammap/iammap_bench_test.go` — distinguish indexed uncached adapter work from any higher-level repeated mapping/cache behavior.
 
 Steps:
-- [ ] Bind `Adapter` to the immutable catalog occurrence index during `New()`; remove both `a.catalog.Services()` loops.
-- [ ] Select raw candidates first by endpoint service and normalized operation, then retain existing protocol, method, path, `Version`, target-prefix, JSON-version, REST URI, and query-binding checks.
-- [ ] Treat zero selected records as unknown and multiple selected records as ambiguous exactly as today. Do not choose the first candidate or merge equivalent mappings.
-- [ ] Deep-copy only selected operation evidence before parameter-dependent evaluation when required by the package boundary; do not retain caller-mutable values in shared index state.
-- [ ] Keep `lookupOperation` evaluation per request. Do not cache conditions, resource ARNs, dependent applicability, or final results across parameter maps.
-- [ ] Add tests proving two raw matching occurrences remain ambiguous, repeated names in different API versions select only through exact wire identity, and mutation of one lookup result cannot affect later lookups.
-- [ ] Extend mapping benchmarks with a direct `LookupRequest` benchmark that varies parameters enough to exercise adapter evaluation rather than an outer decision cache.
+- [x] Bind `Adapter` to the immutable catalog occurrence index during `New()`; remove both `a.catalog.Services()` loops.
+- [x] Select raw candidates first by endpoint service and normalized operation, then retain existing protocol, method, path, `Version`, target-prefix, JSON-version, REST URI, and query-binding checks.
+- [x] Treat zero selected records as unknown and multiple selected records as ambiguous exactly as today. Do not choose the first candidate or merge equivalent mappings.
+- [x] Deep-copy only selected operation evidence before parameter-dependent evaluation when required by the package boundary; do not retain caller-mutable values in shared index state.
+- [x] Keep `lookupOperation` evaluation per request. Do not cache conditions, resource ARNs, dependent applicability, or final results across parameter maps.
+- [x] Add tests proving two raw matching occurrences remain ambiguous, repeated names in different API versions select only through exact wire identity, and mutation of one lookup result cannot affect later lookups.
+- [x] Extend mapping benchmarks with a direct `LookupRequest` benchmark that varies parameters enough to exercise adapter evaluation rather than an outer decision cache.
 
 Verification:
 - `go test ./internal/iammap/iamliveadapter ./internal/iammap -count=1`
