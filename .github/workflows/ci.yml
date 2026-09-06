@@ -31,12 +31,12 @@ jobs:
       GOARCH: amd64
     steps:
       - uses: actions/checkout@v4
-      - name: Initialize pinned iamlive catalog
-        run: make iamlive-init
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      - name: Initialize pinned iamlive catalog
+        run: make iamlive-init
       # Make's verification targets are intentionally offline. Download the
       # build dependencies, then cache the full module graph metadata needed by
       # the license gate without downloading unrelated source archives.
@@ -74,12 +74,12 @@ jobs:
       KORDN_AGENT: claude
     steps:
       - uses: actions/checkout@v4
-      - name: Initialize pinned iamlive catalog
-        run: make iamlive-init
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      - name: Initialize pinned iamlive catalog
+        run: make iamlive-init
       # Keep this job independent of the pure job's module-cache save.
       - name: Download Go modules
         run: |

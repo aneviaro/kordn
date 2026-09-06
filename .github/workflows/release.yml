@@ -31,6 +31,8 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      - name: Initialize pinned iamlive catalog
+        run: make iamlive-init
       # Later release gates run with GOPROXY=off. Download the build
       # dependencies, then cache the full module graph metadata needed by the
       # license gate without downloading unrelated source archives.

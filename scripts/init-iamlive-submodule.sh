@@ -105,4 +105,18 @@ done
 if find "$path" -path "$path/.git" -prune -o \( -name go.mod -o -name go.sum \) -print | grep -q .; then
   echo "nested Go module is present in sparse iamlive checkout" >&2; exit 1
 fi
+
+bundle="$root/internal/iamlivecatalog/catalog.bundle.gz"
+bundle_tmp=$(mktemp "$(dirname "$bundle")/.iamlive-catalog-bundle.XXXXXX")
+trap 'rm -f "$bundle_tmp"' EXIT INT TERM
+( cd "$root" && "${GO:-go}" run ./internal/iamlivecatalog/cmd/pack --source "$path" --output "$bundle_tmp" )
+if [[ "$mode" == init ]]; then
+  mv -f "$bundle_tmp" "$bundle"
+else
+  [[ -s "$bundle" ]] || { echo "iamlive catalog bundle is missing: $bundle" >&2; exit 1; }
+  cmp -s "$bundle_tmp" "$bundle" || {
+    echo "iamlive catalog bundle is stale or non-reproducible; run make iamlive-init" >&2
+    exit 1
+  }
+fi
 printf 'iamlive submodule: PASS %s\n' "$actual"
