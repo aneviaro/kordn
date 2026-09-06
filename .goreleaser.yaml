@@ -19,11 +19,11 @@ builds:
       - -s -w -buildid=
     goos: [darwin, linux]
     goarch: [amd64, arm64]
-    mod_timestamp: '2026-01-01T00:00:00Z'
+    mod_timestamp: '1767225600'
 
 archives:
   - id: kordn
-    builds: [kordn]
+    ids: [kordn]
     formats: [tar.gz]
     wrap_in_directory: true
     files:

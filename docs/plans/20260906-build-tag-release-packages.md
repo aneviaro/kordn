@@ -100,11 +100,11 @@ Files:
 - Reference only: `.goreleaser.yaml` — retain the existing four-target static archive configuration unless implementation reveals a manifest ambiguity that requires an explicit archive name template.
 
 Steps:
-- [ ] Add a post-GoReleaser validation step that reads `dist/artifacts.json`, selects archive artifacts, and compares the complete `(goos, goarch)` multiset to exactly `darwin/amd64`, `darwin/arm64`, `linux/amd64`, and `linux/arm64`.
-- [ ] Require every selected archive path to exist and be non-empty; reject missing targets, duplicate target archives, or additional OS/architecture archives before signing.
-- [ ] Retain the existing checks for `SHA256SUMS` and SBOM files, and keep all archives in the Cosign-signing and GitHub-attestation inputs.
-- [ ] Confirm the release upload still includes the four archives, checksums, SBOMs, provenance/license metadata, metadata checksums, signatures, and certificates.
-- [ ] Add `make iamlive-init` before the canonical local gates in `CONTRIBUTING.md` and document that pushing `v*.*.*` creates the four GitHub release archives only after mandatory verification passes.
+- [x] Add a post-GoReleaser validation step that reads `dist/artifacts.json`, selects archive artifacts, and compares the complete `(goos, goarch)` multiset to exactly `darwin/amd64`, `darwin/arm64`, `linux/amd64`, and `linux/arm64`.
+- [x] Require every selected archive path to exist and be non-empty; reject missing targets, duplicate target archives, or additional OS/architecture archives before signing.
+- [x] Retain the existing checks for `SHA256SUMS` and SBOM files, and keep all archives in the Cosign-signing and GitHub-attestation inputs.
+- [x] Confirm the release upload still includes the four archives, checksums, SBOMs, provenance/license metadata, metadata checksums, signatures, and certificates.
+- [x] Add `make iamlive-init` before the canonical local gates in `CONTRIBUTING.md` and document that pushing `v*.*.*` creates the four GitHub release archives only after mandatory verification passes.
 
 Verification:
 - `goreleaser check`
