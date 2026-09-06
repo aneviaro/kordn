@@ -5,16 +5,21 @@ MIT License. Read `SECURITY.md` before reporting a vulnerability.
 
 ## Development
 
-Use the pinned toolchain in `.go-version` and run the canonical gates before
-opening a pull request:
+Use the pinned toolchain in `.go-version`, initialize the catalog from a fresh
+checkout, and run the canonical gates before opening a pull request:
 
 ```text
+make iamlive-init
 make fmt-check
 make lint
 make test-race
 make license-check
 make build
 ```
+
+Pushing a `v*.*.*` tag publishes exactly four GitHub release archives
+(`darwin/amd64`, `darwin/arm64`, `linux/amd64`, and `linux/arm64`) only after
+mandatory release verification passes.
 
 Keep the one-process, request-boundary architecture intact. Do not add a
 network control plane, an SDK-specific authorization path, or a direct-egress

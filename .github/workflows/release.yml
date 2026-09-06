@@ -120,6 +120,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOPROXY: off
           GOSUMDB: off
+      - name: Verify GoReleaser archive manifest
+        run: |
+          set -euo pipefail
+          expected='[["darwin","amd64"],["darwin","arm64"],["linux","amd64"],["linux","arm64"]]'
+          jq -e --argjson expected "$expected" '
+            [ .[] | select(.type == "Archive") | [.goos, .goarch] ] as $actual
+            | ($actual | sort) == ($expected | sort)
+          ' dist/artifacts.json
+          archive_paths="$(mktemp)"
+          trap 'rm -f "$archive_paths"' EXIT
+          jq -r '.[] | select(.type == "Archive") | .path' dist/artifacts.json > "$archive_paths"
+          test "$(wc -l < "$archive_paths" | tr -d "[:space:]")" -eq 4
+          cat "$archive_paths"
+          while IFS= read -r path; do
+            test -n "$path"
+            test -f "$path"
+            test -s "$path"
+          done < "$archive_paths"
       - name: Install pinned Cosign
         uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
         with:
