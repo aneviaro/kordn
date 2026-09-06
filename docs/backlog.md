@@ -230,3 +230,18 @@ local `kordn run` process, not a separate daemon or network control plane.
 - Background-mode logs and audit records contain no credentials or other secret
   material.
 
+## Distribute Kordn through Homebrew
+
+Make Kordn installable and maintainable through a Homebrew formula so macOS
+users can install and upgrade the CLI using standard Homebrew workflows.
+
+### Desired behavior
+
+- Publish Kordn through an appropriate Homebrew tap or formula location.
+- Install the `kordn` executable with the expected version and platform
+  support.
+- Keep formula metadata, checksums, and release updates aligned with published
+  Kordn artifacts.
+- Document installation, upgrade, and uninstall commands without requiring a
+  separate build environment.
+
