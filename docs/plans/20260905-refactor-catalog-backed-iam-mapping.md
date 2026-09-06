@@ -128,13 +128,13 @@ Files:
 - Test: `internal/iammap/data/version_test.go` — compatibility-facade equivalence and defensive-copy tests.
 
 Steps:
-- [ ] Assign an occurrence ID before normalization/deduplication and retain source order for every API operation, action mapping, resource record, action definition, resource type, and dependent action.
-- [ ] Intern repeated immutable strings and store nested occurrence lists as contiguous spans or ID slices with explicit overflow and bounds validation; do not use set semantics for evidence.
-- [ ] Replace `indexedOperation.operation` copies and alias-expanded full values with occurrence references, and stop cloning mapping slices onto each retained operation.
-- [ ] Remove the resident `Catalog.wireServices` graph and post-attachment `Catalog.mappings` duplicate after canonical indexes are complete.
-- [ ] Add narrow immutable iteration/selection methods for the decoder, adapter, and compatibility facade; keep `Services`, `WireServices`, `Operation`, `OperationOccurrences`, `Actions`, and `Action` as mutation-isolated reconstructed views.
-- [ ] Preserve duplicate API versions and all exact route/query-binding data in decoder buckets; prove request lookup stays bounded to an indexed candidate bucket.
-- [ ] Assert source-to-index cardinalities, including the current 19,543 API operation occurrences, so compaction cannot silently collapse duplicates.
+- [x] Assign an occurrence ID before normalization/deduplication and retain source order for every API operation, action mapping, resource record, action definition, resource type, and dependent action.
+- [x] Intern repeated immutable strings and store nested occurrence lists as contiguous spans or ID slices with explicit overflow and bounds validation; do not use set semantics for evidence.
+- [x] Replace `indexedOperation.operation` copies and alias-expanded full values with occurrence references, and stop cloning mapping slices onto each retained operation.
+- [x] Remove the resident `Catalog.wireServices` graph and post-attachment `Catalog.mappings` duplicate after canonical indexes are complete.
+- [x] Add narrow immutable iteration/selection methods for the decoder, adapter, and compatibility facade; keep `Services`, `WireServices`, `Operation`, `OperationOccurrences`, `Actions`, and `Action` as mutation-isolated reconstructed views.
+- [x] Preserve duplicate API versions and all exact route/query-binding data in decoder buckets; prove request lookup stays bounded to an indexed candidate bucket.
+- [x] Assert source-to-index cardinalities, including the current 19,543 API operation occurrences, so compaction cannot silently collapse duplicates.
 
 Verification:
 - `go test ./internal/iamlivecatalog ./internal/awsrequest ./internal/iammap/data -count=1`

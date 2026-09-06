@@ -23,22 +23,166 @@ const (
 	EvidenceContradictory  EvidenceState = "contradictory"
 )
 
+// Catalog is an immutable publication of the parsed source evidence. Mutable
+// public values are reconstructed by the accessors below; the compact stores
+// themselves are never exposed to consumers.
 type Catalog struct {
-	version              string
-	sourceHash           string
-	services             []Service
-	serviceIndex         map[string][]int
-	operations           map[string][]indexedOperation
-	operationOccurrences map[string][]operationPosition
-	wireServices         []WireService
-	actions              map[string][]ActionDefinition
-	mappings             map[string][]ActionMapping
-	permissionless       map[string]bool
+	version    string
+	sourceHash string
+	// store is the sole retained normalized evidence. The fields below are
+	// build-only compatibility slots and are cleared before Catalog is
+	// published; selectors never read them.
+	store                   *compactStore
+	services                []Service
+	serviceIndex            map[string][]int
+	operations              map[string][]indexedOperation
+	operationOccurrences    map[string][]operationPosition
+	serviceOperationIndexes [][]compactOperationPosition
+	// buildActions and buildActionOrder exist only while the parser converts
+	// source definitions into compact records; compactEvidence clears them
+	// before publication.
+	buildActions     map[string][]ActionDefinition
+	buildActionOrder []actionPosition
+	mappingStore     []ActionMapping
+	mappingIndex     map[string][]mappingSpan
+	mappingOrder     []mappingPosition
+	permissionless   map[string]bool
+	strings          []string
+	stringIndex      map[string]stringID
+	nextEvidenceID   occurrenceID
 }
 
+// These bounded IDs are deliberately private: an invalid zero value cannot be
+// confused with a source occurrence, and spans are checked while compiling.
+type stringID uint32
+type occurrenceID uint32
+type mappingSpan struct{ start, count uint32 }
+type actionPosition struct {
+	key   string
+	index int
+}
+type mappingPosition struct {
+	storeIndex uint32
+	occurrence occurrenceID
+	key        string
+}
+
+const (
+	invalidStringID     stringID     = 0
+	invalidOccurrenceID occurrenceID = 0
+	maxCatalogItems                  = uint32(^uint32(0) - 1)
+)
+
+type wireOperationVisitor func(WireService, WireOperation) error
+
 type indexedOperation struct {
-	modelKey  string
-	operation Operation
+	modelKey                     string
+	serviceIndex, operationIndex int
+	occurrence                   occurrenceID
+}
+
+type compactStore struct {
+	strings          []string
+	stringIndex      map[string]stringID
+	services         []compactService
+	operations       []compactOperation
+	serviceOps       [][]compactOperationPosition
+	operationIndex   map[string][]compactIndex
+	occurrences      map[string][]compactPosition
+	mappings         []compactMapping
+	mappingIndex     map[string][]mappingSpan
+	mappingOrder     []mappingPosition
+	actions          []compactAction
+	actionIndex      map[string][]compactActionIndex
+	actionOrder      []compactActionPosition
+	resources        []compactResource
+	mappingResources []compactResourceMapping
+	dependents       []compactDependent
+	conditions       []compactCondition
+	mapPairs         []compactMapPair
+	queryRecords     []compactQuery
+	refs             []stringID
+}
+
+type compactService struct {
+	key, id, endpoint, signing, target, apiVersion, protocol stringID
+	protocols, aliases                                       stringSpan
+}
+type stringSpan struct{ start, count uint32 }
+type compactPosition struct {
+	operation  int
+	occurrence occurrenceID
+}
+type compactOperationPosition struct {
+	operation  int
+	occurrence occurrenceID
+}
+type compactActionPosition struct {
+	action     int
+	occurrence occurrenceID
+}
+type compactIndex struct {
+	operation  int
+	occurrence occurrenceID
+}
+type compactActionIndex struct {
+	action     int
+	occurrence occurrenceID
+}
+type compactOperation struct {
+	occurrence                   occurrenceID
+	service, name, input, output stringID
+	route                        compactRoute
+	queries                      stringSpan
+	state, mappingState          EvidenceState
+	mappings                     []mappingSpan
+}
+type compactRoute struct {
+	method, uri, discriminator, target, jsonVersion stringID
+	responseCode                                    int
+}
+type compactQuery struct {
+	member, location stringID
+	required         bool
+}
+type compactMapping struct {
+	occurrence             occurrenceID
+	action                 stringID
+	state                  EvidenceState
+	resources              stringSpan
+	arn, conditionMappings stringSpan
+	condition              int
+	arnOverride, notice    stringID
+}
+type compactResourceMapping struct {
+	occurrence          occurrenceID
+	parameter, template stringID
+	condition           int
+}
+type compactMapPair struct {
+	key, value stringID
+	resource   int
+}
+type compactCondition struct {
+	lhs, op, rhs stringID
+	and          int
+}
+type compactAction struct {
+	occurrence                         occurrenceID
+	service, name, access, description stringID
+	resources                          stringSpan
+	state                              EvidenceState
+}
+type compactResource struct {
+	occurrence                      occurrenceID
+	name                            stringID
+	conditionKeys, dependentActions stringSpan
+	dependentIDs                    []occurrenceID
+	dependents                      stringSpan
+}
+type compactDependent struct {
+	occurrence occurrenceID
+	action     stringID
 }
 
 type Service struct {
@@ -77,15 +221,18 @@ type OperationOccurrence struct {
 type operationPosition struct {
 	serviceIndex   int
 	operationIndex int
+	occurrence     occurrenceID
 }
 
 type Operation struct {
+	occurrenceID                           occurrenceID
 	Service, Name, InputShape, OutputShape string
 	Route                                  Route
 	QueryBindings                          []QueryBinding
 	Mappings                               []ActionMapping
 	MappingState                           EvidenceState
 	State                                  EvidenceState
+	mappingSpans                           []mappingSpan
 }
 
 // QueryBinding describes a modeled REST query-string member. Required is
@@ -105,17 +252,22 @@ type Route struct {
 }
 
 type ActionMapping struct {
-	Action              string
-	State               EvidenceState
-	Resources           []ResourceMapping
-	ResourceARNMappings map[string]string
-	Condition           *Condition
-	ConditionMappings   map[string]ResourceMapping
-	ARNOverride         string
-	Notice              string
+	occurrenceID occurrenceID
+	// SourceOrder is intentionally private; occurrenceID is the stable address
+	// used by diagnostic selectors and is never reused after normalization.
+	Action                string
+	State                 EvidenceState
+	Resources             []ResourceMapping
+	ResourceARNMappings   map[string]string
+	Condition             *Condition
+	ConditionMappings     map[string]ResourceMapping
+	conditionMappingOrder []string
+	ARNOverride           string
+	Notice                string
 }
 
 type ResourceMapping struct {
+	occurrenceID        occurrenceID
 	Parameter, Template string
 	Condition           *Condition
 }
@@ -126,15 +278,18 @@ type Condition struct {
 }
 
 type ActionDefinition struct {
+	occurrenceID                            occurrenceID
 	Service, Name, AccessLevel, Description string
 	Resources                               []ResourceType
 	State                                   EvidenceState
 }
 
 type ResourceType struct {
-	Name             string
-	ConditionKeys    []string
-	DependentActions []string
+	occurrenceID       occurrenceID
+	Name               string
+	ConditionKeys      []string
+	DependentActions   []string
+	dependentActionIDs []occurrenceID
 }
 
 // RawMapping is available for diagnostics and preserves upstream fields not
@@ -208,6 +363,7 @@ func (o OperationOccurrence) Clone() OperationOccurrence {
 func (o Operation) Clone() Operation {
 	o.QueryBindings = cloneQueryBindings(o.QueryBindings)
 	o.Mappings = cloneMappings(o.Mappings)
+	o.mappingSpans = nil
 	return o
 }
 func cloneMappings(in []ActionMapping) []ActionMapping {
@@ -230,6 +386,7 @@ func cloneCondition(in *Condition) *Condition {
 }
 
 func (m ActionMapping) Clone() ActionMapping {
+	m.conditionMappingOrder = nil
 	m.Resources = append([]ResourceMapping(nil), m.Resources...)
 	for i := range m.Resources {
 		m.Resources[i].Condition = cloneCondition(m.Resources[i].Condition)
@@ -265,6 +422,7 @@ func (a ActionDefinition) Clone() ActionDefinition {
 	for i := range a.Resources {
 		a.Resources[i].ConditionKeys = cloneStrings(a.Resources[i].ConditionKeys)
 		a.Resources[i].DependentActions = cloneStrings(a.Resources[i].DependentActions)
+		a.Resources[i].dependentActionIDs = append([]occurrenceID(nil), a.Resources[i].dependentActionIDs...)
 	}
 	return a
 }

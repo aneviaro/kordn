@@ -301,33 +301,25 @@ func TestWireOccurrenceIndexPreservesCatalogCardinality(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := 0
-	for serviceIndex, service := range c.services {
-		want += len(service.Operations)
-		for operationIndex, operation := range service.Operations {
-			key := operationKey(service.EndpointPrefix, operation.Name)
-			positions := c.operationOccurrences[key]
-			found := false
-			for _, position := range positions {
-				if position.serviceIndex == serviceIndex && position.operationIndex == operationIndex {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Fatalf("operation %s/%s missing from occurrence index", service.EndpointPrefix, operation.Name)
-			}
-		}
+	if len(c.store.operations) != 19543 {
+		t.Fatalf("operations = %d, want 19543", len(c.store.operations))
 	}
-	got := 0
-	for key, positions := range c.operationOccurrences {
+	seen := map[occurrenceID]bool{}
+	for _, operation := range c.store.operations {
+		if operation.occurrence == invalidOccurrenceID || seen[operation.occurrence] {
+			t.Fatal("operation occurrence identity lost")
+		}
+		seen[operation.occurrence] = true
+	}
+	for key, positions := range c.store.occurrences {
 		if len(positions) == 0 {
-			t.Fatalf("occurrence index has empty bucket %q", key)
+			t.Fatalf("empty occurrence bucket %q", key)
 		}
-		got += len(positions)
-	}
-	if got != want {
-		t.Fatalf("occurrence index cardinality = %d, want %d", got, want)
+		for _, position := range positions {
+			if position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				t.Fatalf("corrupt occurrence %q", key)
+			}
+		}
 	}
 }
 
@@ -336,92 +328,39 @@ func TestWireOccurrenceSelectorsPreserveVersionsAndAreImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	var duplicateKey string
-	var versions map[string]bool
-	for key, positions := range c.operationOccurrences {
-		if len(positions) < 2 {
-			continue
-		}
-		candidateVersions := map[string]bool{}
-		for _, position := range positions {
-			candidateVersions[c.services[position.serviceIndex].APIVersion] = true
-		}
-		if len(candidateVersions) > 1 {
-			duplicateKey, versions = key, candidateVersions
+	var key string
+	for candidate, positions := range c.store.occurrences {
+		if len(positions) > 1 {
+			key = candidate
 			break
 		}
 	}
-	if duplicateKey == "" {
-		t.Fatal("catalog has no repeated operation across API versions")
+	if key == "" {
+		t.Fatal("no duplicate operation")
 	}
-	parts := strings.SplitN(duplicateKey, "\x00", 2)
-	occurrences := c.OperationOccurrences(parts[0], parts[1])
-	if len(occurrences) != len(c.operationOccurrences[duplicateKey]) {
-		t.Fatalf("occurrence selector cardinality = %d, want %d", len(occurrences), len(c.operationOccurrences[duplicateKey]))
+	parts := strings.SplitN(key, "\x00", 2)
+	got := c.OperationOccurrences(parts[0], parts[1])
+	if len(got) != len(c.store.occurrences[key]) {
+		t.Fatal("occurrence cardinality changed")
 	}
-	seenVersions := map[string]bool{}
-	for _, occurrence := range occurrences {
-		seenVersions[occurrence.Service.APIVersion] = true
-	}
-	if !reflect.DeepEqual(seenVersions, versions) {
-		t.Fatalf("occurrence API versions = %v, want %v", seenVersions, versions)
-	}
-	if got := c.OperationOccurrences("unknown-endpoint", "unknown-operation"); len(got) != 0 {
-		t.Fatalf("unknown occurrence key returned %d candidates", len(got))
-	}
-
 	wire := c.WireServices()
 	if len(wire) == 0 || len(wire[0].Operations) == 0 {
-		t.Fatal("wire snapshot is empty")
+		t.Fatal("empty wire view")
 	}
-	wireWant := wire[0].Clone()
-	wire[0].Protocols = append(wire[0].Protocols, "mutated")
-	wire[0].Operations[0].QueryBindings = append(wire[0].Operations[0].QueryBindings, QueryBinding{Member: "mutated"})
-	wire[0].Operations = append(wire[0].Operations, WireOperation{Name: "mutated"})
-	wireAgain := c.WireServices()
-	if !reflect.DeepEqual(wireAgain[0], wireWant) {
-		t.Fatal("wire snapshot output aliases catalog storage")
+	want := wire[0].Clone()
+	wire[0].Operations[0].Name = "mutated"
+	if !reflect.DeepEqual(c.WireServices()[0], want) {
+		t.Fatal("wire view aliases store")
 	}
-
-	// Lambda CreateFunction has nested mapping maps and conditions in the pinned
-	// catalog, making it a compact check that the selected full operation is
-	// isolated at every mutable level.
 	selected := c.OperationOccurrences("lambda", "CreateFunction")
 	if len(selected) == 0 {
-		t.Fatal("expected Lambda CreateFunction occurrence")
+		t.Fatal("missing Lambda occurrence")
 	}
-	occurrenceWant := selected[0].Clone()
-	selected[0].Service.Protocols = append(selected[0].Service.Protocols, "mutated")
-	op := &selected[0].Operation
-	op.QueryBindings = append(op.QueryBindings, QueryBinding{Member: "mutated"})
-	for i := range op.Mappings {
-		mapping := &op.Mappings[i]
-		mapping.ResourceARNMappings["mutated"] = "mutated"
-		mapping.ConditionMappings["mutated"] = ResourceMapping{Condition: &Condition{LHS: "mutated"}}
-		mapping.Resources = append(mapping.Resources, ResourceMapping{Condition: &Condition{LHS: "mutated"}})
-		if mapping.Condition != nil {
-			mapping.Condition.LHS = "mutated"
-			if mapping.Condition.And != nil {
-				mapping.Condition.And.RHS = "mutated"
-			}
-		}
-		for j := range mapping.Resources {
-			if mapping.Resources[j].Condition != nil {
-				mapping.Resources[j].Condition.RHS = "mutated"
-			}
-		}
-		for key := range mapping.ConditionMappings {
-			if mapping.ConditionMappings[key].Condition != nil {
-				value := mapping.ConditionMappings[key]
-				value.Condition.Op = "mutated"
-				mapping.ConditionMappings[key] = value
-			}
-		}
-	}
+	wantOccurrence := selected[0].Clone()
+	selected[0].Operation.Mappings[0].Action = "mutated"
 	fresh := c.OperationOccurrences("lambda", "CreateFunction")
-	if len(fresh) != len(selected) || !reflect.DeepEqual(fresh[0], occurrenceWant) {
-		t.Fatal("selected operation output aliases catalog storage")
+	if !reflect.DeepEqual(fresh[0], wantOccurrence) {
+		t.Fatal("operation view aliases store")
 	}
 }
 
@@ -536,29 +475,600 @@ func TestModeledRESTQueryBindingsDisambiguateS3(t *testing.T) {
 	}
 }
 
+func TestCatalogRetainsEveryEvidenceKindInSourceOrderAndInternsValues(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MappingOccurrenceCardinality() == 0 || c.InternedStringCardinality() == 0 {
+		t.Fatal("canonical evidence stores are empty")
+	}
+	all := c.AllMappingOccurrences()
+	for i := 1; i < len(all); i++ {
+		if all[i-1].occurrenceID >= all[i].occurrenceID {
+			t.Fatal("mapping source order lost")
+		}
+	}
+	resources, dependencies := 0, 0
+	if err := c.ForEachResourceTypeOccurrence(func(ResourceType) error { resources++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ForEachDependentActionOccurrence(func(string) error { dependencies++; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if resources == 0 || dependencies == 0 {
+		t.Fatal("nested evidence missing")
+	}
+	if c.stringIndex != nil {
+		t.Fatal("build string index retained")
+	}
+}
+
+func TestCatalogSpanAndOccurrenceBoundsRejectCorruption(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := *c
+	copied := *c.store
+	copied.mappingIndex = map[string][]mappingSpan{operationKey("bad", "operation"): {{start: uint32(len(c.store.mappings)), count: 1}}}
+	probe.store = &copied
+	if got := probe.MappingOccurrences("bad", "operation"); got != nil {
+		t.Fatal("invalid mapping span addressable")
+	}
+	if validMappingSpan(mappingSpan{start: 1, count: 1}, 1) || !validMappingSpan(mappingSpan{start: 0, count: 1}, 1) {
+		t.Fatal("span bounds incorrect")
+	}
+}
+
+func cloneCatalogForCorruption(c *Catalog) *Catalog {
+	probe := *c
+	store := *c.store
+	store.services = append([]compactService(nil), c.store.services...)
+	store.operations = append([]compactOperation(nil), c.store.operations...)
+	for i := range store.operations {
+		store.operations[i].mappings = append([]mappingSpan(nil), c.store.operations[i].mappings...)
+	}
+	store.serviceOps = make([][]compactOperationPosition, len(c.store.serviceOps))
+	for i := range c.store.serviceOps {
+		store.serviceOps[i] = append([]compactOperationPosition(nil), c.store.serviceOps[i]...)
+	}
+	store.queryRecords = append([]compactQuery(nil), c.store.queryRecords...)
+	store.mappings = append([]compactMapping(nil), c.store.mappings...)
+	store.mappingResources = append([]compactResourceMapping(nil), c.store.mappingResources...)
+	store.mapPairs = append([]compactMapPair(nil), c.store.mapPairs...)
+	store.mappingIndex = make(map[string][]mappingSpan, len(c.store.mappingIndex))
+	for key, spans := range c.store.mappingIndex {
+		store.mappingIndex[key] = append([]mappingSpan(nil), spans...)
+	}
+	store.conditions = append([]compactCondition(nil), c.store.conditions...)
+	store.actions = append([]compactAction(nil), c.store.actions...)
+	store.resources = append([]compactResource(nil), c.store.resources...)
+	for i := range store.resources {
+		store.resources[i].dependentIDs = append([]occurrenceID(nil), c.store.resources[i].dependentIDs...)
+	}
+	store.dependents = append([]compactDependent(nil), c.store.dependents...)
+	store.actionOrder = append([]compactActionPosition(nil), c.store.actionOrder...)
+	probe.store = &store
+	return &probe
+}
+
+func TestCatalogRetainsOnlyCompactCanonicalStore(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.store == nil {
+		t.Fatal("compact canonical store was not published")
+	}
+	if c.services != nil || c.mappingStore != nil || c.buildActions != nil {
+		t.Fatal("full parser views remain retained after publication")
+	}
+}
+
+func TestCatalogSelectorsRejectEveryCompactIDAndSpanKind(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := 0
+	for i, value := range c.store.operations {
+		if value.queries.count > 0 {
+			operation = i
+			break
+		}
+	}
+	mapping := 0
+	mappingWithResource := 0
+	mappingWithCondition := 0
+	mappingWithConditionPair := 0
+	for i, value := range c.store.mappings {
+		if value.resources.count > 0 && c.store.mappingResources[value.resources.start].occurrence != invalidOccurrenceID {
+			mappingWithResource = i
+		}
+		if value.condition >= 0 {
+			mappingWithCondition = i
+		}
+		if value.conditionMappings.count > 0 {
+			mappingWithConditionPair = i
+		}
+		if value.resources.count > 0 || value.condition >= 0 || value.conditionMappings.count > 0 {
+			mapping = i
+		}
+	}
+	action := 0
+	for i, value := range c.store.actions {
+		if value.resources.count > 0 {
+			action = i
+			break
+		}
+	}
+	resource := int(c.store.actions[action].resources.start)
+	dependencyResource := resource
+	for i, value := range c.store.resources {
+		if value.dependents.count > 0 {
+			dependencyResource = i
+			break
+		}
+	}
+	cases := []struct {
+		name string
+		bad  func(*compactStore)
+		ok   func(*Catalog) bool
+	}{
+		{"operation occurrence", func(s *compactStore) { s.operations[operation].occurrence = 0 }, func(p *Catalog) bool { return p.Operations() == nil }},
+		{"route ID", func(s *compactStore) { s.operations[operation].route.method = stringID(len(s.strings)) }, func(p *Catalog) bool { return p.Operations() == nil }},
+		{"query span", func(s *compactStore) {
+			s.operations[operation].queries = stringSpan{start: uint32(len(s.queryRecords)), count: 1}
+		}, func(p *Catalog) bool { return p.Operations() == nil }},
+		{"query ID", func(s *compactStore) {
+			s.queryRecords[s.operations[operation].queries.start].member = stringID(len(s.strings))
+		}, func(p *Catalog) bool { return p.Operations() == nil }},
+		{"mapping occurrence", func(s *compactStore) { s.mappings[mapping].occurrence = 0 }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping resource span", func(s *compactStore) {
+			s.mappings[mappingWithResource].resources = stringSpan{start: uint32(len(s.mappingResources)), count: 1}
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping resource ID", func(s *compactStore) {
+			s.mappingResources[s.mappings[mappingWithResource].resources.start].occurrence = 0
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"condition ID", func(s *compactStore) {
+			s.conditions[s.mappings[mappingWithCondition].condition].lhs = stringID(len(s.strings))
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"condition resource index", func(s *compactStore) {
+			s.mapPairs[s.mappings[mappingWithConditionPair].conditionMappings.start].resource = -1
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"action occurrence", func(s *compactStore) { s.actionOrder[0].occurrence = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"action ID", func(s *compactStore) { s.actions[action].service = stringID(len(s.strings)) }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"resource span", func(s *compactStore) {
+			s.actions[action].resources = stringSpan{start: uint32(len(s.resources)), count: 1}
+		}, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"resource occurrence", func(s *compactStore) { s.resources[resource].occurrence = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency span", func(s *compactStore) {
+			s.resources[dependencyResource].dependents = stringSpan{start: uint32(len(s.dependents)), count: 1}
+		}, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency occurrence", func(s *compactStore) { s.resources[dependencyResource].dependentIDs[0] = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency record ID", func(s *compactStore) { s.dependents[s.resources[dependencyResource].dependents.start].occurrence = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency action ID", func(s *compactStore) {
+			s.dependents[s.resources[dependencyResource].dependents.start].action = stringID(len(s.strings))
+		}, func(p *Catalog) bool { return p.Actions() == nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := cloneCatalogForCorruption(c)
+			tc.bad(probe.store)
+			if !tc.ok(probe) {
+				t.Fatal("corrupt compact record remained addressable")
+			}
+		})
+	}
+}
+
+func TestCatalogCanonicalOccurrencesAreInternedOrderedAndDistinct(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.store == nil || len(c.store.strings) < 2 {
+		t.Fatal("canonical string store is empty")
+	}
+	// Equal source values in distinct operation records must point at one
+	// nonzero interned ID, rather than merely producing a small string pool.
+	var repeated stringID
+	var repeatedValue string
+	seenOperations := map[stringID]occurrenceID{}
+	for _, operation := range c.store.operations {
+		if operation.service == invalidStringID || operation.service >= stringID(len(c.store.strings)) {
+			continue
+		}
+		if prior, ok := seenOperations[operation.service]; ok && prior != operation.occurrence {
+			repeated = operation.service
+			repeatedValue = c.store.strings[repeated]
+			break
+		}
+		seenOperations[operation.service] = operation.occurrence
+	}
+	if repeated == invalidStringID || repeatedValue == "" || c.store.strings[repeated] != repeatedValue {
+		t.Fatalf("repeated operation source value was not actually interned: id=%d value=%q", repeated, repeatedValue)
+	}
+
+	increasing := func(name string, ids []occurrenceID) {
+		t.Helper()
+		if len(ids) == 0 {
+			t.Fatalf("%s has no retained occurrences", name)
+		}
+		for i, id := range ids {
+			if id == invalidOccurrenceID || (i > 0 && ids[i-1] >= id) {
+				t.Fatalf("%s source order/identity lost at %d: %v", name, i, ids)
+			}
+		}
+	}
+	operationIDs := make([]occurrenceID, 0, len(c.store.operations))
+	for _, operation := range c.store.operations {
+		operationIDs = append(operationIDs, operation.occurrence)
+	}
+	increasing("API operations", operationIDs)
+	publicOperations := c.Operations()
+	if len(publicOperations) != len(operationIDs) {
+		t.Fatalf("public operation count = %d, want %d", len(publicOperations), len(operationIDs))
+	}
+	for i := range publicOperations {
+		if publicOperations[i].occurrenceID != operationIDs[i] {
+			t.Fatalf("public operation %d identity = %d, want %d", i, publicOperations[i].occurrenceID, operationIDs[i])
+		}
+	}
+
+	mappingIDs := make([]occurrenceID, 0, len(c.store.mappingOrder))
+	unmatched := false
+	for _, position := range c.store.mappingOrder {
+		mapping := c.store.mappings[position.storeIndex]
+		mappingIDs = append(mappingIDs, mapping.occurrence)
+		if mapping.state == EvidenceAbsent {
+			unmatched = true
+		}
+		if mapping.occurrence != position.occurrence {
+			t.Fatalf("mapping order identity mismatch at store index %d", position.storeIndex)
+		}
+	}
+	increasing("IAM mappings", mappingIDs)
+	if !unmatched {
+		t.Fatal("no unmatched mapping occurrence was retained before filtering")
+	}
+	publicMappings := c.AllMappingOccurrences()
+	if len(publicMappings) != len(mappingIDs) {
+		t.Fatalf("public mapping count = %d, want %d", len(publicMappings), len(mappingIDs))
+	}
+	for i := range publicMappings {
+		if publicMappings[i].occurrenceID != mappingIDs[i] {
+			t.Fatalf("public mapping %d identity = %d, want %d", i, publicMappings[i].occurrenceID, mappingIDs[i])
+		}
+	}
+
+	actionIDs := make([]occurrenceID, 0, len(c.store.actionOrder))
+	for _, position := range c.store.actionOrder {
+		action := c.store.actions[position.action]
+		actionIDs = append(actionIDs, action.occurrence)
+		if action.occurrence != position.occurrence {
+			t.Fatalf("action order identity mismatch at store index %d", position.action)
+		}
+	}
+	increasing("action definitions", actionIDs)
+	publicActions := c.Actions()
+	if len(publicActions) != len(actionIDs) {
+		t.Fatalf("public action count = %d, want %d", len(publicActions), len(actionIDs))
+	}
+	for i := range publicActions {
+		if publicActions[i].occurrenceID != actionIDs[i] {
+			t.Fatalf("public action %d identity = %d, want %d", i, publicActions[i].occurrenceID, actionIDs[i])
+		}
+	}
+
+	resourceIDs := []occurrenceID{}
+	for _, position := range c.store.actionOrder {
+		action := c.store.actions[position.action]
+		if !validSpan(action.resources, len(c.store.resources)) {
+			t.Fatal("invalid resource span in retained action")
+		}
+		for i := uint32(0); i < action.resources.count; i++ {
+			resourceIDs = append(resourceIDs, c.store.resources[action.resources.start+i].occurrence)
+		}
+	}
+	increasing("resource types", resourceIDs)
+	var publicResources []ResourceType
+	if err := c.ForEachResourceTypeOccurrence(func(resource ResourceType) error {
+		publicResources = append(publicResources, resource)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(publicResources) != len(resourceIDs) {
+		t.Fatalf("public resource count = %d, want %d", len(publicResources), len(resourceIDs))
+	}
+	for i := range publicResources {
+		if publicResources[i].occurrenceID != resourceIDs[i] {
+			t.Fatalf("public resource %d identity = %d, want %d", i, publicResources[i].occurrenceID, resourceIDs[i])
+		}
+	}
+
+	dependentIDs := make([]occurrenceID, 0, len(c.store.dependents))
+	for _, dependent := range c.store.dependents {
+		dependentIDs = append(dependentIDs, dependent.occurrence)
+	}
+	increasing("dependent actions", dependentIDs)
+	var publicDependencies []string
+	if err := c.ForEachDependentActionOccurrence(func(dependency string) error {
+		publicDependencies = append(publicDependencies, dependency)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(publicDependencies) != len(dependentIDs) {
+		t.Fatalf("public dependency count = %d, want %d", len(publicDependencies), len(dependentIDs))
+	}
+	for i, dependent := range c.store.dependents {
+		value, ok := compactString(c.store, dependent.action)
+		if !ok || publicDependencies[i] != value {
+			t.Fatalf("public dependency %d = %q, want %q", i, publicDependencies[i], value)
+		}
+	}
+
+	// Confirm multiplicity is not collapsed when equal values recur. Action
+	// definitions use case-insensitive source keys because the pinned fixture's
+	// duplicate evidence is case-variant.
+	duplicateOperation := false
+	operationSeen := map[[2]stringID]occurrenceID{}
+	for _, operation := range c.store.operations {
+		key := [2]stringID{operation.service, operation.name}
+		if prior, ok := operationSeen[key]; ok && prior != operation.occurrence {
+			duplicateOperation = true
+			break
+		}
+		operationSeen[key] = operation.occurrence
+	}
+	duplicateMapping := false
+	mappingSeen := map[stringID]occurrenceID{}
+	for _, mapping := range c.store.mappings {
+		if prior, ok := mappingSeen[mapping.action]; ok && prior != mapping.occurrence {
+			duplicateMapping = true
+			break
+		}
+		mappingSeen[mapping.action] = mapping.occurrence
+	}
+	duplicateResource := false
+	resourceSeen := map[stringID]occurrenceID{}
+	for _, resource := range c.store.resources {
+		if resource.name != invalidStringID {
+			if prior, ok := resourceSeen[resource.name]; ok && prior != resource.occurrence {
+				duplicateResource = true
+				break
+			}
+			resourceSeen[resource.name] = resource.occurrence
+		}
+	}
+	duplicateDependent := false
+	dependentSeen := map[stringID]occurrenceID{}
+	for _, dependent := range c.store.dependents {
+		if dependent.action != invalidStringID {
+			if prior, ok := dependentSeen[dependent.action]; ok && prior != dependent.occurrence {
+				duplicateDependent = true
+				break
+			}
+			dependentSeen[dependent.action] = dependent.occurrence
+		}
+	}
+	duplicateAction := false
+	actionSeen := map[[2]string]occurrenceID{}
+	for _, action := range c.store.actions {
+		service, serviceOK := compactString(c.store, action.service)
+		name, nameOK := compactString(c.store, action.name)
+		if serviceOK && nameOK {
+			key := [2]string{strings.ToLower(service), strings.ToLower(name)}
+			if prior, ok := actionSeen[key]; ok && prior != action.occurrence {
+				duplicateAction = true
+				break
+			}
+			actionSeen[key] = action.occurrence
+		}
+	}
+	if !duplicateOperation || !duplicateMapping || !duplicateResource || !duplicateDependent || !duplicateAction {
+		t.Fatalf("duplicate occurrence multiplicity missing: operation=%v mapping=%v action=%v resource=%v dependent=%v", duplicateOperation, duplicateMapping, duplicateAction, duplicateResource, duplicateDependent)
+	}
+}
+
+func TestCatalogSelectorsRejectOverflowAndExactEndForEveryNestedSpan(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := -1
+	for i, value := range c.store.operations {
+		if value.queries.count > 0 && len(value.mappings) > 0 {
+			operation = i
+			break
+		}
+	}
+	if operation < 0 {
+		t.Fatal("fixture has no operation with query and mapping spans")
+	}
+	opService, ok := compactString(c.store, c.store.operations[operation].service)
+	if !ok {
+		t.Fatal("operation service ID is corrupt")
+	}
+	opName, ok := compactString(c.store, c.store.operations[operation].name)
+	if !ok {
+		t.Fatal("operation name ID is corrupt")
+	}
+	mapping := -1
+	mappingWithResource, mappingWithARN, mappingWithConditionMap := -1, -1, -1
+	mappingWithCondition := -1
+	for i, value := range c.store.mappings {
+		if value.resources.count > 0 {
+			mappingWithResource = i
+		}
+		if value.arn.count > 0 {
+			mappingWithARN = i
+		}
+		if value.conditionMappings.count > 0 {
+			mappingWithConditionMap = i
+		}
+		if value.condition >= 0 {
+			mappingWithCondition = i
+		}
+		if value.resources.count > 0 || value.arn.count > 0 || value.conditionMappings.count > 0 {
+			mapping = i
+		}
+	}
+	if mapping < 0 || mappingWithResource < 0 || mappingWithARN < 0 || mappingWithConditionMap < 0 || mappingWithCondition < 0 {
+		t.Fatal("fixture lacks required nested mapping records")
+	}
+	mappingIndexKey := ""
+	for key, spans := range c.store.mappingIndex {
+		if len(spans) > 0 {
+			mappingIndexKey = key
+			break
+		}
+	}
+	if mappingIndexKey == "" {
+		t.Fatal("fixture lacks mapping index spans")
+	}
+	mappingIndexParts := strings.SplitN(mappingIndexKey, "\x00", 2)
+	action := -1
+	for i, value := range c.store.actions {
+		if value.resources.count > 0 {
+			action = i
+			break
+		}
+	}
+	if action < 0 {
+		t.Fatal("fixture lacks action resources")
+	}
+	resource := int(c.store.actions[action].resources.start)
+	resourceWithDependencies := -1
+	for i, value := range c.store.resources {
+		if value.dependentActions.count > 0 && len(value.dependentIDs) > 0 {
+			resourceWithDependencies = i
+			break
+		}
+	}
+	if resourceWithDependencies < 0 {
+		t.Fatal("fixture lacks dependent action resources")
+	}
+
+	badSpans := func(length int) []stringSpan {
+		return []stringSpan{
+			// A count beginning exactly at the backing-store boundary is invalid.
+			{start: uint32(length), count: 1},
+			// These operands deliberately wrap uint32 arithmetic.
+			{start: ^uint32(0), count: ^uint32(0)},
+		}
+	}
+	type spanCase struct {
+		name   string
+		length int
+		set    func(*compactStore, stringSpan)
+		valid  func(*Catalog) bool
+	}
+	cases := []spanCase{
+		{"operation query span", len(c.store.queryRecords), func(s *compactStore, span stringSpan) { s.operations[operation].queries = span }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"operation mapping span", len(c.store.mappings), func(s *compactStore, span stringSpan) {
+			s.operations[operation].mappings[0] = mappingSpan{start: span.start, count: span.count}
+		}, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"mapping index span", len(c.store.mappings), func(s *compactStore, span stringSpan) {
+			s.mappingIndex[mappingIndexKey][0] = mappingSpan{start: span.start, count: span.count}
+		}, func(p *Catalog) bool { return p.MappingOccurrences(mappingIndexParts[0], mappingIndexParts[1]) == nil }},
+		{"mapping resource span", len(c.store.mappingResources), func(s *compactStore, span stringSpan) { s.mappings[mappingWithResource].resources = span }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping ARN map-pair span", len(c.store.mapPairs), func(s *compactStore, span stringSpan) { s.mappings[mappingWithARN].arn = span }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping condition map-pair span", len(c.store.mapPairs), func(s *compactStore, span stringSpan) { s.mappings[mappingWithConditionMap].conditionMappings = span }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"action resource span", len(c.store.resources), func(s *compactStore, span stringSpan) { s.actions[action].resources = span }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"resource condition-key span", len(c.store.refs), func(s *compactStore, span stringSpan) { s.resources[resource].conditionKeys = span }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"resource dependent-action span", len(c.store.refs), func(s *compactStore, span stringSpan) { s.resources[resourceWithDependencies].dependentActions = span }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"resource dependency-record span", len(c.store.dependents), func(s *compactStore, span stringSpan) { s.resources[resourceWithDependencies].dependents = span }, func(p *Catalog) bool { return p.Actions() == nil }},
+	}
+	for _, tc := range cases {
+		for variant, span := range badSpans(tc.length) {
+			t.Run(tc.name+"/variant"+string(rune('0'+variant)), func(t *testing.T) {
+				probe := cloneCatalogForCorruption(c)
+				tc.set(probe.store, span)
+				if !tc.valid(probe) {
+					t.Fatalf("selector accepted malformed %s span %#v", tc.name, span)
+				}
+			})
+		}
+	}
+
+	type idCase struct {
+		name  string
+		set   func(*compactStore)
+		valid func(*Catalog) bool
+	}
+	invalidID := func(s *compactStore) stringID { return stringID(len(s.strings)) }
+	idCases := []idCase{
+		{"route method ID", func(s *compactStore) { s.operations[operation].route.method = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"route URI ID", func(s *compactStore) { s.operations[operation].route.uri = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"route discriminator ID", func(s *compactStore) { s.operations[operation].route.discriminator = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"route target ID", func(s *compactStore) { s.operations[operation].route.target = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"route JSON version ID", func(s *compactStore) { s.operations[operation].route.jsonVersion = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"query member ID", func(s *compactStore) { s.queryRecords[s.operations[operation].queries.start].member = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"query location ID", func(s *compactStore) { s.queryRecords[s.operations[operation].queries.start].location = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
+		{"mapping action ID", func(s *compactStore) { s.mappings[mapping].action = invalidID(s) }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping resource ID", func(s *compactStore) {
+			s.mappingResources[s.mappings[mappingWithResource].resources.start].occurrence = invalidOccurrenceID
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping pair key ID", func(s *compactStore) { s.mapPairs[s.mappings[mappingWithARN].arn.start].key = invalidID(s) }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping pair value ID", func(s *compactStore) { s.mapPairs[s.mappings[mappingWithARN].arn.start].value = invalidID(s) }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"condition pair resource index", func(s *compactStore) {
+			s.mapPairs[s.mappings[mappingWithConditionMap].conditionMappings.start].resource = len(s.mappingResources)
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"condition pair value ID", func(s *compactStore) {
+			s.mapPairs[s.mappings[mappingWithConditionMap].conditionMappings.start].value = invalidID(s)
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping condition ID", func(s *compactStore) { s.conditions[s.mappings[mappingWithCondition].condition].lhs = invalidID(s) }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping condition index", func(s *compactStore) { s.mappings[mappingWithCondition].condition = len(s.conditions) }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"mapping condition cycle", func(s *compactStore) {
+			s.conditions[s.mappings[mappingWithCondition].condition].and = s.mappings[mappingWithCondition].condition
+		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
+		{"action service ID", func(s *compactStore) { s.actions[action].service = invalidID(s) }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"resource name ID", func(s *compactStore) { s.resources[resource].name = invalidID(s) }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency action ID", func(s *compactStore) {
+			s.dependents[s.resources[resourceWithDependencies].dependents.start].action = invalidID(s)
+		}, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency occurrence ID", func(s *compactStore) { s.resources[resourceWithDependencies].dependentIDs[0] = invalidOccurrenceID }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"dependency ID-slice boundary", func(s *compactStore) {
+			s.resources[resourceWithDependencies].dependentIDs = s.resources[resourceWithDependencies].dependentIDs[:len(s.resources[resourceWithDependencies].dependentIDs)-1]
+		}, func(p *Catalog) bool { return p.Actions() == nil }},
+	}
+	for _, tc := range idCases {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := cloneCatalogForCorruption(c)
+			tc.set(probe.store)
+			if !tc.valid(probe) {
+				t.Fatal("selector accepted malformed nested ID")
+			}
+		})
+	}
+}
+
 func TestCatalogIndexesEveryAPIOperation(t *testing.T) {
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	count := 0
-	for _, s := range c.Services() {
-		for _, o := range s.Operations {
+	for _, service := range c.Services() {
+		for _, operation := range service.Operations {
 			count++
-			indexed := c.operations[operationKey(s.EndpointPrefix, o.Name)]
+			indexes := c.store.operationIndex[operationKey(service.EndpointPrefix, operation.Name)]
 			found := false
-			for _, candidate := range indexed {
-				if candidate.modelKey == s.Key && operationEquivalent(candidate.operation, o) {
+			for _, position := range indexes {
+				if position.operation >= 0 && position.operation < len(c.store.operations) && c.store.operations[position.operation].occurrence == position.occurrence {
 					found = true
-					break
 				}
 			}
 			if !found {
-				t.Fatalf("unindexed %s/%s model %q", s.EndpointPrefix, o.Name, s.Key)
+				t.Fatalf("unindexed %s/%s", service.EndpointPrefix, operation.Name)
 			}
 		}
 	}
-	if count != len(c.Operations()) {
-		t.Fatalf("operation index dropped records: service count %d, index count %d", count, len(c.Operations()))
+	if count != len(c.store.operations) {
+		t.Fatalf("operation count %d/%d", count, len(c.store.operations))
 	}
 }

@@ -34,55 +34,45 @@ func Entries() ([]Entry, error) {
 		return nil, e
 	}
 	seen := map[string]bool{}
-	counts := map[string]int{}
-	for _, s := range c.Services() {
-		for _, o := range s.Operations {
-			counts[strings.ToLower(s.EndpointPrefix)+"\x00"+strings.ToLower(o.Name)]++
-		}
-	}
 	out := []Entry{}
-	for _, s := range c.Services() {
-		for _, o := range s.Operations {
-			if counts[strings.ToLower(s.EndpointPrefix)+"\x00"+strings.ToLower(o.Name)] != 1 || o.State != iamlivecatalog.EvidenceKnown || o.MappingState != iamlivecatalog.EvidenceKnown || len(o.Mappings) == 0 {
-				continue
+	err := c.ForEachOperation(func(s string, o iamlivecatalog.Operation) error {
+		if c.OperationCardinality(s, o.Name) != 1 || o.State != iamlivecatalog.EvidenceKnown || o.MappingState != iamlivecatalog.EvidenceKnown || len(o.Mappings) == 0 {
+			return nil
+		}
+		m := o.Mappings[0]
+		if m.State != iamlivecatalog.EvidenceKnown || len(strings.SplitN(m.Action, ":", 2)) != 2 {
+			return nil
+		}
+		a, err := c.Action(m.Action)
+		if err != nil || a.State != iamlivecatalog.EvidenceKnown {
+			return nil
+		}
+		resource, scope := "global", "known_global"
+		var deps []string
+		var nonGlobal []iamlivecatalog.ResourceType
+		for _, r := range a.Resources {
+			if r.Name != "" {
+				nonGlobal = append(nonGlobal, r)
 			}
-			m := o.Mappings[0]
-			if m.State != iamlivecatalog.EvidenceKnown {
-				continue
-			}
-			parts := strings.SplitN(m.Action, ":", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			a, err := c.Action(m.Action)
-			if err != nil || a.State != iamlivecatalog.EvidenceKnown {
-				continue
-			}
-			resource := "global"
-			scope := "known_global"
-			var deps []string
-			nonGlobal := []iamlivecatalog.ResourceType{}
-			for _, r := range a.Resources {
-				if r.Name != "" {
-					nonGlobal = append(nonGlobal, r)
-				}
-				deps = append(deps, r.DependentActions...)
-			}
-			if len(nonGlobal) > 0 {
-				resource = nonGlobal[0].Name
-				scope = "exact"
-				if len(nonGlobal) > 1 {
-					scope = "unresolved"
-				}
-			}
-			sort.Strings(deps)
-			x := Entry{Service: strings.ToLower(s.EndpointPrefix), Operation: o.Name, Action: m.Action, Resource: resource, Scope: scope, Dependencies: append([]string(nil), deps...)}
-			k := x.Service + "\x00" + x.Operation
-			if !seen[k] {
-				seen[k] = true
-				out = append(out, x)
+			deps = append(deps, r.DependentActions...)
+		}
+		if len(nonGlobal) > 0 {
+			resource, scope = nonGlobal[0].Name, "exact"
+			if len(nonGlobal) > 1 {
+				scope = "unresolved"
 			}
 		}
+		sort.Strings(deps)
+		x := Entry{Service: strings.ToLower(s), Operation: o.Name, Action: m.Action, Resource: resource, Scope: scope, Dependencies: append([]string(nil), deps...)}
+		k := x.Service + "\x00" + x.Operation
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, x)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Service != out[j].Service {
@@ -97,17 +87,7 @@ func Entries() ([]Entry, error) {
 }
 
 func operationRecordCount(c *iamlivecatalog.Catalog, service, operation string) int {
-	count := 0
-	for _, s := range c.Services() {
-		if strings.EqualFold(s.EndpointPrefix, service) {
-			for _, o := range s.Operations {
-				if strings.EqualFold(o.Name, operation) {
-					count++
-				}
-			}
-		}
-	}
-	return count
+	return c.OperationCardinality(service, operation)
 }
 
 func ValidateEntry(e Entry) error {
