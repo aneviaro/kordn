@@ -11,6 +11,7 @@
 *.key
 *.crt
 .DS_Store
+/internal/iamlivecatalog/catalog.bundle.gz
 
 
 # Editors

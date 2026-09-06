@@ -91,12 +91,12 @@ Files:
 - Test: `internal/iamlivecatalog/catalog_test.go` — malformed archive, duplicate/missing/oversized entry, reproducibility, and unchanged-source-hash coverage.
 
 Steps:
-- [ ] Define a canonical archive manifest/order for `LICENSE`, `NOTICE`, `iamlivecore/map.json`, `iamlivecore/iam_definition.json`, and sorted API-model paths; use fixed gzip/tar metadata so identical pinned input produces byte-identical output.
-- [ ] Make the packer verify the submodule `.git` marker and exact nested top-level path before reading selected files, then reject symlinks, duplicate canonical paths, unexpected paths, missing required paths, oversized entries, truncation, or trailing archive data.
-- [ ] Generate the ignored bundle atomically from the sparse pinned checkout in normal initialization; make `--check` compare a temporary regeneration byte-for-byte without mutating the working tree.
-- [ ] Replace raw-file `go:embed` patterns with the single bundle and stream bounded entries through parsing instead of materializing an additional whole uncompressed corpus.
-- [ ] Recompute `Catalog.SourceHash` from the original canonical path/byte sequence, not compressed bytes, and retain license/notice validation.
-- [ ] Reorder or extend CI and both release jobs so setup-go and `make iamlive-init` occur before any compile, direct `go test`, strict gate, or GoReleaser invocation.
+- [x] Define a canonical archive manifest/order for `LICENSE`, `NOTICE`, `iamlivecore/map.json`, `iamlivecore/iam_definition.json`, and sorted API-model paths; use fixed gzip/tar metadata so identical pinned input produces byte-identical output.
+- [x] Make the packer verify the submodule `.git` marker and exact nested top-level path before reading selected files, then reject symlinks, duplicate canonical paths, unexpected paths, missing required paths, oversized entries, truncation, or trailing archive data.
+- [x] Generate the ignored bundle atomically from the sparse pinned checkout in normal initialization; make `--check` compare a temporary regeneration byte-for-byte without mutating the working tree.
+- [x] Replace raw-file `go:embed` patterns with the single bundle and stream bounded entries through parsing instead of materializing an additional whole uncompressed corpus.
+- [x] Recompute `Catalog.SourceHash` from the original canonical path/byte sequence, not compressed bytes, and retain license/notice validation.
+- [x] Reorder or extend CI and both release jobs so setup-go and `make iamlive-init` occur before any compile, direct `go test`, strict gate, or GoReleaser invocation.
 
 Verification:
 - `make iamlive-init`

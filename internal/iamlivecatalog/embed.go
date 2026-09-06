@@ -1,9 +1,10 @@
 package iamlivecatalog
 
-import "embed"
+import _ "embed"
 
-// embeddedData is the immutable, offline input boundary. Only the selected
-// upstream data files are embedded; upstream runtime and module files are not.
+// embeddedBundle is the immutable, offline input boundary. The selected
+// upstream data files are packed into one deterministic archive; upstream
+// runtime and module files are not embedded.
 //
-//go:embed upstream/LICENSE upstream/NOTICE upstream/iamlivecore/map.json upstream/iamlivecore/iam_definition.json upstream/iamlivecore/apis/*/*/api-2.json
-var embeddedData embed.FS
+//go:embed catalog.bundle.gz
+var embeddedBundle []byte

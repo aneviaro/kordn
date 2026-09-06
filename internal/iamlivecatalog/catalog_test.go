@@ -1,11 +1,12 @@
 package iamlivecatalog
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"io/fs"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -124,46 +125,102 @@ func TestCatalogVariedServiceContracts(t *testing.T) {
 	}
 }
 
+func TestBundleRejectsMalformedDuplicateMissingOversizedAndTrailingEntries(t *testing.T) {
+	valid := func(names ...string) []byte {
+		var out bytes.Buffer
+		gz := gzip.NewWriter(&out)
+		tw := tar.NewWriter(gz)
+		for _, name := range names {
+			data := []byte("{}")
+			if name == "iamlivecore/apis/a/v/api-2.json" {
+				data = []byte(`{"metadata":{},"operations":{},"shapes":{}}`)
+			}
+			if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return out.Bytes()
+	}
+	fixed := append([]string{}, bundleFixedEntries...)
+	fixed = append(fixed, "iamlivecore/apis/a/v/api-2.json")
+	cases := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"malformed gzip", []byte("not gzip"), "bundle gzip"},
+		{"missing fixed entry", valid(bundleFixedEntries[0], bundleFixedEntries[1], bundleFixedEntries[2], "iamlivecore/apis/a/v/api-2.json"), "expected"},
+		{"duplicate API entry", valid(append(fixed, "iamlivecore/apis/a/v/api-2.json")...), "duplicated"},
+		{"trailing archive data", append(valid(fixed...), []byte("trailing")...), "trailing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := readBundleData(tc.data, func(string, []byte) error { return nil }); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	var oversized bytes.Buffer
+	gz := gzip.NewWriter(&oversized)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "LICENSE", Mode: 0600, Size: maxJSONBytes + 1, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	if err := readBundleData(oversized.Bytes(), func(string, []byte) error { return nil }); err == nil || !strings.Contains(err.Error(), "exceeds parser bound") {
+		t.Fatalf("oversized entry error = %v", err)
+	}
+}
+
 func TestCatalogSourceHashRejectsAlteredAPIModelContent(t *testing.T) {
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	apiPaths, err := fs.Glob(embeddedData, "upstream/iamlivecore/apis/*/*/api-2.json")
-	if err != nil || len(apiPaths) == 0 {
-		t.Fatalf("API model set unavailable: %v", err)
+	if c.SourceHash() != "43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869" {
+		t.Fatalf("source hash changed: %s", c.SourceHash())
 	}
-	sort.Strings(apiPaths)
-	alteredPath := apiPaths[0]
-	original, err := readEmbedded(alteredPath)
-	if err != nil {
-		t.Fatal(err)
+	var original []byte
+	err = readBundle(func(name string, data []byte) error {
+		if original == nil && strings.HasPrefix(name, "iamlivecore/apis/") {
+			original = append([]byte(nil), data...)
+		}
+		return nil
+	})
+	if err != nil || len(original) == 0 {
+		t.Fatalf("API model set unavailable: %v", err)
 	}
 	altered := append([]byte(nil), original...)
 	altered[len(altered)/2] ^= 1
 	contentHash := func(replacement []byte) string {
 		h := sha256.New()
-		for _, item := range []struct {
-			name string
-			data []byte
-		}{
-			{"LICENSE", mustEmbedded(t, "upstream/LICENSE")},
-			{"NOTICE", mustEmbedded(t, "upstream/NOTICE")},
-			{"iamlivecore/map.json", mustEmbedded(t, "upstream/iamlivecore/map.json")},
-			{"iamlivecore/iam_definition.json", mustEmbedded(t, "upstream/iamlivecore/iam_definition.json")},
-		} {
-			h.Write([]byte(item.name))
-			h.Write([]byte{0})
-			h.Write(item.data)
-		}
-		for _, file := range apiPaths {
-			data := mustEmbedded(t, file)
-			if file == alteredPath && replacement != nil {
-				data = replacement
+		firstAPI := true
+		err := readBundle(func(name string, data []byte) error {
+			hashName := name
+			if strings.HasPrefix(name, "iamlivecore/apis/") {
+				hashName = "upstream/" + name
+				if firstAPI && replacement != nil {
+					data = replacement
+				}
+				firstAPI = false
 			}
-			h.Write([]byte(file))
+			h.Write([]byte(hashName))
 			h.Write([]byte{0})
 			h.Write(data)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 		return hex.EncodeToString(h.Sum(nil))
 	}
@@ -173,15 +230,6 @@ func TestCatalogSourceHashRejectsAlteredAPIModelContent(t *testing.T) {
 	if got := contentHash(altered); got == c.SourceHash() {
 		t.Fatal("altered API-model bytes retained the catalog content identity")
 	}
-}
-
-func mustEmbedded(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := readEmbedded(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }
 
 func TestCatalogPreservesAbsentAndContradictoryMappingEvidence(t *testing.T) {

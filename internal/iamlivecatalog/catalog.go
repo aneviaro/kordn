@@ -1,14 +1,15 @@
 package iamlivecatalog
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"path"
 	"reflect"
 	"sort"
@@ -21,6 +22,7 @@ import (
 // gitlink revision. The selected-content digest is exposed by Catalog.SourceHash.
 const CatalogVersion = "iamlive-catalog/v2@" + UpstreamCommit
 const catalogVersion = CatalogVersion
+const expectedSourceHash = "43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869"
 const maxJSONBytes = 64 << 20
 
 var (
@@ -191,21 +193,49 @@ func (c *Catalog) Action(action string) (ActionDefinition, error) {
 // parse is intentionally kept separate from the package-level cache so tests
 // can exercise construction through the immutable public API.
 func parse() (*Catalog, error) {
-	licenseBytes, err := readEmbedded("upstream/LICENSE")
+	var licenseBytes, noticeBytes, mapBytes, defBytes []byte
+	cat := &Catalog{version: catalogVersion, serviceIndex: map[string][]int{}, operations: map[string][]indexedOperation{}, actions: map[string][]ActionDefinition{}, mappings: map[string][]ActionMapping{}, permissionless: map[string]bool{}}
+	h := sha256.New()
+	err := readBundle(func(name string, data []byte) error {
+		// The archive names are the canonical source paths. API entries retain
+		// the historical embedded prefix in SourceHash for compatibility.
+		var hashName string
+		switch name {
+		case "LICENSE":
+			licenseBytes = data
+			hashName = name
+		case "NOTICE":
+			noticeBytes = data
+			hashName = name
+		case "iamlivecore/map.json":
+			mapBytes = data
+			hashName = name
+		case "iamlivecore/iam_definition.json":
+			defBytes = data
+			hashName = name
+		default:
+			if !strings.HasPrefix(name, "iamlivecore/apis/") {
+				return fmt.Errorf("bundle: unexpected entry %q", name)
+			}
+			hashName = "upstream/" + name
+			a, err := decodeAPI("upstream/"+name, data)
+			if err != nil {
+				return err
+			}
+			if err := cat.addAPI("upstream/"+name, a); err != nil {
+				return err
+			}
+		}
+		h.Write([]byte(hashName))
+		h.Write([]byte{0})
+		h.Write(data)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	noticeBytes, err := readEmbedded("upstream/NOTICE")
-	if err != nil {
-		return nil, err
-	}
-	mapBytes, err := readEmbedded("upstream/iamlivecore/map.json")
-	if err != nil {
-		return nil, err
-	}
-	defBytes, err := readEmbedded("upstream/iamlivecore/iam_definition.json")
-	if err != nil {
-		return nil, err
+	if len(licenseBytes) == 0 || len(noticeBytes) == 0 {
+		return nil, errors.New("bundle: license or notice is empty")
 	}
 	if err = validJSON(mapBytes, "map.json"); err != nil {
 		return nil, err
@@ -232,40 +262,8 @@ func parse() (*Catalog, error) {
 	if len(rawDefs) == 0 {
 		return nil, errors.New("iam_definition.json: empty")
 	}
-	cat := &Catalog{version: catalogVersion, serviceIndex: map[string][]int{}, operations: map[string][]indexedOperation{}, actions: map[string][]ActionDefinition{}, mappings: map[string][]ActionMapping{}, permissionless: map[string]bool{}}
-	h := sha256.New()
-	for _, item := range []struct {
-		name string
-		data []byte
-	}{{"LICENSE", licenseBytes}, {"NOTICE", noticeBytes}, {"iamlivecore/map.json", mapBytes}, {"iamlivecore/iam_definition.json", defBytes}} {
-		h.Write([]byte(item.name))
-		h.Write([]byte{0})
-		h.Write(item.data)
-	}
-	apiPaths, err := fs.Glob(embeddedData, "upstream/iamlivecore/apis/*/*/api-2.json")
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(apiPaths)
-	if len(apiPaths) == 0 {
-		return nil, errors.New("API model set is empty")
-	}
-	for _, file := range apiPaths {
-		b, e := readEmbedded(file)
-		if e != nil {
-			return nil, e
-		}
-		h.Write([]byte(file))
-		h.Write([]byte{0})
-		h.Write(b)
-		a, e := decodeAPI(file, b)
-		if e != nil {
-			return nil, e
-		}
-		if e = cat.addAPI(file, a); e != nil {
-			return nil, e
-		}
-	}
+	// API entries are decoded as they leave the archive, so no second
+	// uncompressed copy of the selected corpus is retained.
 	for _, d := range rawDefs {
 		if err = cat.addDefinition(d); err != nil {
 			return nil, err
@@ -377,6 +375,9 @@ func parse() (*Catalog, error) {
 	}
 	cat.buildWireIndexes()
 	cat.sourceHash = hex.EncodeToString(h.Sum(nil))
+	if cat.sourceHash != expectedSourceHash {
+		return nil, fmt.Errorf("bundle source hash %s does not match pinned hash", cat.sourceHash)
+	}
 	return cat, nil
 }
 
@@ -745,15 +746,100 @@ func uniqueStrings(in []string) []string {
 	}
 	return out
 }
-func readEmbedded(name string) ([]byte, error) {
-	b, e := fs.ReadFile(embeddedData, name)
-	if e != nil {
-		return nil, e
+
+// readBundle validates the deterministic archive and invokes fn for one
+// bounded entry at a time. It performs no filesystem or network IO.
+func readBundle(fn func(name string, data []byte) error) error {
+	return readBundleData(embeddedBundle, fn)
+}
+
+func readBundleData(bundle []byte, fn func(name string, data []byte) error) error {
+	compressed := bytes.NewReader(bundle)
+	gz, err := gzip.NewReader(compressed)
+	if err != nil {
+		return fmt.Errorf("bundle gzip: %w", err)
 	}
-	if len(b) > maxJSONBytes {
-		return nil, fmt.Errorf("%s exceeds parser bound", name)
+	gz.Multistream(false)
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	lastAPI := ""
+	entries := 0
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("bundle tar: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg || header.Name != cleanBundlePath(header.Name) || header.Linkname != "" {
+			return fmt.Errorf("bundle: invalid entry %q", header.Name)
+		}
+		if header.Size < 0 || header.Size > maxJSONBytes {
+			return fmt.Errorf("bundle entry %q exceeds parser bound", header.Name)
+		}
+		if !validBundleName(header.Name) {
+			return fmt.Errorf("bundle: unexpected entry %q", header.Name)
+		}
+		if strings.HasPrefix(header.Name, "iamlivecore/apis/") {
+			if entries < len(bundleFixedEntries) {
+				return fmt.Errorf("bundle: expected %q before API entries", bundleFixedEntries[entries])
+			}
+			if header.Name <= lastAPI {
+				return fmt.Errorf("bundle: API entries are not in canonical order or are duplicated")
+			}
+			lastAPI = header.Name
+		} else if entries >= 4 {
+			return fmt.Errorf("bundle: fixed entries are out of order")
+		} else if header.Name != bundleFixedEntries[entries] {
+			return fmt.Errorf("bundle: expected %q, got %q", bundleFixedEntries[entries], header.Name)
+		}
+		data := make([]byte, header.Size)
+		if _, err := io.ReadFull(tr, data); err != nil {
+			return fmt.Errorf("bundle entry %q is truncated: %w", header.Name, err)
+		}
+		if err := fn(header.Name, data); err != nil {
+			return err
+		}
+		entries++
 	}
-	return b, nil
+	if entries < len(bundleFixedEntries) || lastAPI == "" {
+		return errors.New("bundle is missing required entries")
+	}
+	// archive/tar consumes the two zero end blocks while returning EOF. Any
+	// bytes left in the gzip stream are therefore truncation or trailing data.
+	trailer, err := io.ReadAll(gz)
+	if err != nil {
+		return fmt.Errorf("bundle gzip trailer: %w", err)
+	}
+	if len(trailer) != 0 {
+		return errors.New("bundle has malformed or trailing archive data")
+	}
+	if compressed.Len() != 0 {
+		return errors.New("bundle has trailing compressed data")
+	}
+	return nil
+}
+
+var bundleFixedEntries = []string{"LICENSE", "NOTICE", "iamlivecore/map.json", "iamlivecore/iam_definition.json"}
+
+func validBundleName(name string) bool {
+	for _, fixed := range bundleFixedEntries {
+		if name == fixed {
+			return true
+		}
+	}
+	parts := strings.Split(name, "/")
+	return len(parts) == 5 && parts[0] == "iamlivecore" && parts[1] == "apis" &&
+		parts[2] != "" && parts[3] != "" && parts[4] == "api-2.json"
+}
+
+func cleanBundlePath(name string) string {
+	if name == "" || strings.Contains(name, "\\") {
+		return ""
+	}
+	return path.Clean(name)
 }
 func validJSON(b []byte, name string) error {
 	if len(b) > maxJSONBytes {

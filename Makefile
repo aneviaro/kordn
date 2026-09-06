@@ -17,8 +17,9 @@ iamlive-init:
 	@./scripts/init-iamlive-submodule.sh
 
 iamlive-check:
-	@set -eu; path=internal/iamlivecatalog/upstream; \
+	@set -eu; path=internal/iamlivecatalog/upstream; bundle=internal/iamlivecatalog/catalog.bundle.gz; \
 	test -d "$$path" || { echo 'iamlive catalog absent; run make iamlive-init' >&2; exit 1; }; \
+	test -s "$$bundle" || { echo 'iamlive catalog bundle absent; run make iamlive-init' >&2; exit 1; }; \
 	./scripts/init-iamlive-submodule.sh --check || { echo 'iamlive catalog is not prepared; run make iamlive-init' >&2; exit 1; }; \
 	test "$$(git -C "$$path" rev-parse HEAD)" = "$$(cat third_party/iamlive/UPSTREAM_COMMIT)" || { echo 'iamlive pin differs from UPSTREAM_COMMIT; run make iamlive-init' >&2; exit 1; }; \
 	for pair in \
