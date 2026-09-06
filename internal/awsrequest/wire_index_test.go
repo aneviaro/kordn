@@ -44,6 +44,45 @@ func TestWireIndexSnapshotsOnceAndDecodeDoesNotEnumerate(t *testing.T) {
 	}
 }
 
+type selectorSpy struct {
+	wireSnapshotSpy
+	selectorCalls int
+}
+
+func (s *selectorSpy) ForEachWireOperation(fn func(iamlivecatalog.WireService, iamlivecatalog.WireOperation) error) error {
+	s.selectorCalls++
+	for _, service := range s.services {
+		for _, operation := range service.Operations {
+			if err := fn(service, operation); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TestWireIndexUsesImmutableSelectorAndCopiesPublishedCandidates(t *testing.T) {
+	spy := &selectorSpy{wireSnapshotSpy: wireSnapshotSpy{services: []iamlivecatalog.WireService{{
+		EndpointPrefix: "example", APIVersion: "v1", Protocol: "query",
+		Operations: []iamlivecatalog.WireOperation{{Name: "Op", State: iamlivecatalog.EvidenceKnown, Route: iamlivecatalog.Route{Method: "POST", URI: "/"}, QueryBindings: []iamlivecatalog.QueryBinding{{Member: "Input", LocationName: "input"}}}},
+	}}}}
+	idx, err := buildWireIndex(spy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spy.selectorCalls != 1 || spy.calls != 0 {
+		t.Fatalf("selector/snapshot calls = %d/%d, want 1/0", spy.selectorCalls, spy.calls)
+	}
+	spy.services[0].Operations[0].QueryBindings[0].LocationName = "mutated"
+	candidates := idx.query[queryIndexKey{"example", string(ProtocolQuery), "v1", "Op"}]
+	if len(candidates) != 1 || candidates[0].operation.QueryBindings[0].LocationName != "input" {
+		t.Fatal("published wire index aliases selector input")
+	}
+	if got := catalogQueryOperation(idx, "example", "v1", ProtocolQuery, "Op"); !got {
+		t.Fatal("single immutable wire candidate was not addressable")
+	}
+}
+
 func TestWireIndexRejectsMalformedFixedRouteQuery(t *testing.T) {
 	spy := &wireSnapshotSpy{services: []iamlivecatalog.WireService{{
 		EndpointPrefix: "example", Protocol: "rest-xml",

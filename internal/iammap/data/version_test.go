@@ -32,3 +32,26 @@ func TestVersionFacadeUsesPinnedCatalog(t *testing.T) {
 		t.Fatal("legacy generated datasets remain exposed")
 	}
 }
+
+func TestCompatibilityFacadeEquivalenceAndDefensiveCopies(t *testing.T) {
+	entries, err := Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyEntries := append([]Entry(nil), entries...)
+	copyEntries[0].Dependencies = append(copyEntries[0].Dependencies, "mutated")
+	copyEntries[0].Service = "mutated"
+	fresh, err := Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh) != len(entries) || fresh[0].Service == "mutated" {
+		t.Fatal("facade Entries returned aliased mutable state")
+	}
+	if err := CheckNoWidening(entries, entries); err != nil {
+		t.Fatalf("facade self-equivalence failed: %v", err)
+	}
+	if err := ValidateEntry(entries[0]); err != nil {
+		t.Fatalf("facade entry validation failed: %v", err)
+	}
+}

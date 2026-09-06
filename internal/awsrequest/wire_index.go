@@ -42,78 +42,76 @@ type wireCandidate struct {
 	routePath    string
 }
 
-// wireSnapshot is deliberately narrow. Production and tests must explicitly
-// provide the compact, occurrence-preserving snapshot before construction.
+// wireSnapshot is retained only as a source-compatible test seam. Production
+// uses wireSelector, which never asks the catalog for a graph-sized snapshot.
 type wireSnapshot interface {
 	WireServices() []iamlivecatalog.WireService
 }
+type wireSelector interface {
+	ForEachWireOperation(func(iamlivecatalog.WireService, iamlivecatalog.WireOperation) error) error
+}
 
-func buildWireIndex(source wireSnapshot) (*wireIndex, error) {
+func buildWireIndex(source interface{}) (*wireIndex, error) {
 	if source == nil {
 		return nil, errors.New("wire catalog is unavailable")
 	}
-	services := source.WireServices() // exactly one snapshot
 	idx := &wireIndex{
-		authority: make(map[string][]protocolEvidence),
-		query:     make(map[queryIndexKey][]wireCandidate),
-		json:      make(map[jsonIndexKey][]wireCandidate),
-		variants:  make(map[jsonVariantKey][]wireCandidate),
-		rest:      make(map[restIndexKey][]wireCandidate),
-		modeled:   make(map[modeledIndexKey][]wireCandidate),
+		authority: make(map[string][]protocolEvidence), query: make(map[queryIndexKey][]wireCandidate),
+		json: make(map[jsonIndexKey][]wireCandidate), variants: make(map[jsonVariantKey][]wireCandidate),
+		rest: make(map[restIndexKey][]wireCandidate), modeled: make(map[modeledIndexKey][]wireCandidate),
 	}
-	for _, service := range services {
-		if service.Protocol == "json" {
-			for _, operation := range service.Operations {
-				protocol, ok := catalogProtocol(service.Protocol, operation.Route.JSONVersion)
-				idx.authority[service.EndpointPrefix] = append(idx.authority[service.EndpointPrefix], protocolEvidence{protocol: protocol, valid: ok})
-			}
-		} else {
-			protocol, ok := catalogProtocol(service.Protocol, "")
+	authorityModels := map[string]bool{}
+	visit := func(service iamlivecatalog.WireService, original iamlivecatalog.WireOperation) error {
+		authorityKey := service.EndpointPrefix + "\x00" + service.APIVersion + "\x00" + service.TargetPrefix + "\x00" + service.Protocol + "\x00" + original.Route.JSONVersion
+		if service.Protocol == "json" || !authorityModels[authorityKey] {
+			protocol, ok := catalogProtocol(service.Protocol, original.Route.JSONVersion)
 			idx.authority[service.EndpointPrefix] = append(idx.authority[service.EndpointPrefix], protocolEvidence{protocol: protocol, valid: ok})
+			authorityModels[authorityKey] = true
 		}
-		for _, original := range service.Operations {
-			fixed, routePath, ok := indexRouteQuery(original.Route.URI)
-			if !ok {
-				return nil, fmt.Errorf("wire index: service %q operation %q has malformed fixed route query", service.EndpointPrefix, original.Name)
+		fixed, routePath, ok := indexRouteQuery(original.Route.URI)
+		if !ok {
+			return fmt.Errorf("wire index: service %q operation %q has malformed fixed route query", service.EndpointPrefix, original.Name)
+		}
+		protocol, protocolOK := catalogProtocol(service.Protocol, original.Route.JSONVersion)
+		if !protocolOK {
+			return nil
+		} // authority retains negative evidence
+		operation := original
+		operation.QueryBindings = append([]iamlivecatalog.QueryBinding(nil), original.QueryBindings...)
+		candidate := wireCandidate{service: service.EndpointPrefix, apiVersion: service.APIVersion, targetPrefix: service.TargetPrefix, protocol: protocol, operation: operation, fixedQuery: cloneURLValues(fixed), routePath: routePath}
+		if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 {
+			key := jsonIndexKey{service.EndpointPrefix, string(protocol), service.TargetPrefix, original.Name}
+			idx.json[key] = append(idx.json[key], candidate)
+			if original.Route.TargetPrefix != "" {
+				vkey := jsonVariantKey{service.EndpointPrefix, string(protocol), original.Name, original.Route.TargetPrefix}
+				idx.variants[vkey] = append(idx.variants[vkey], candidate)
 			}
-			protocol, protocolOK := catalogProtocol(service.Protocol, original.Route.JSONVersion)
-			if !protocolOK {
-				continue // authority retains this as negative evidence
-			}
-			op := original
-			op.QueryBindings = append([]iamlivecatalog.QueryBinding(nil), original.QueryBindings...)
-			candidate := wireCandidate{
-				service: service.EndpointPrefix, apiVersion: service.APIVersion,
-				targetPrefix: service.TargetPrefix, protocol: protocol,
-				operation: op, fixedQuery: cloneURLValues(fixed), routePath: routePath,
-			}
-			if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 {
-				key := jsonIndexKey{service.EndpointPrefix, string(protocol), service.TargetPrefix, original.Name}
-				idx.json[key] = append(idx.json[key], candidate)
-				if original.Route.TargetPrefix != "" {
-					// Keep target ownership evidence keyed by the wire target,
-					// including occurrences supplied by variant models.
-					vkey := jsonVariantKey{service.EndpointPrefix, string(protocol), original.Name, original.Route.TargetPrefix}
-					idx.variants[vkey] = append(idx.variants[vkey], candidate)
-				}
-			}
-			switch protocol {
-			case ProtocolQuery, ProtocolEC2Query:
-				key := queryIndexKey{service.EndpointPrefix, string(protocol), service.APIVersion, original.Name}
-				idx.query[key] = append(idx.query[key], candidate)
-			case ProtocolRESTJSON, ProtocolRESTXML:
-				// URI templates contain path parameters, so method is the bounded route
-				// discriminator; each retained candidate performs exact template matching.
-				key := restIndexKey{service.EndpointPrefix, string(protocol), strings.ToUpper(original.Route.Method), ""}
-				idx.rest[key] = append(idx.rest[key], candidate)
-			case ProtocolJSON10, ProtocolJSON11:
-				// JSON is also checked against its modeled envelope before body parsing.
-				key := modeledIndexKey{service.EndpointPrefix, string(protocol), routePath, strings.ToUpper(original.Route.Method)}
-				idx.modeled[key] = append(idx.modeled[key], candidate)
-			}
-			if protocol == ProtocolQuery || protocol == ProtocolEC2Query {
-				key := modeledIndexKey{service.EndpointPrefix, string(protocol), routePath, strings.ToUpper(original.Route.Method)}
-				idx.modeled[key] = append(idx.modeled[key], candidate)
+		}
+		switch protocol {
+		case ProtocolQuery, ProtocolEC2Query:
+			idx.query[queryIndexKey{service.EndpointPrefix, string(protocol), service.APIVersion, original.Name}] = append(idx.query[queryIndexKey{service.EndpointPrefix, string(protocol), service.APIVersion, original.Name}], candidate)
+		case ProtocolRESTJSON, ProtocolRESTXML:
+			idx.rest[restIndexKey{service.EndpointPrefix, string(protocol), strings.ToUpper(original.Route.Method), ""}] = append(idx.rest[restIndexKey{service.EndpointPrefix, string(protocol), strings.ToUpper(original.Route.Method), ""}], candidate)
+		case ProtocolJSON10, ProtocolJSON11:
+			idx.modeled[modeledIndexKey{service.EndpointPrefix, string(protocol), routePath, strings.ToUpper(original.Route.Method)}] = append(idx.modeled[modeledIndexKey{service.EndpointPrefix, string(protocol), routePath, strings.ToUpper(original.Route.Method)}], candidate)
+		}
+		if protocol == ProtocolQuery || protocol == ProtocolEC2Query {
+			key := modeledIndexKey{service.EndpointPrefix, string(protocol), routePath, strings.ToUpper(original.Route.Method)}
+			idx.modeled[key] = append(idx.modeled[key], candidate)
+		}
+		return nil
+	}
+	if selector, ok := source.(wireSelector); ok {
+		return idx, selector.ForEachWireOperation(visit)
+	}
+	legacy, ok := source.(wireSnapshot)
+	if !ok {
+		return nil, errors.New("wire catalog does not provide an immutable selector")
+	}
+	for _, service := range legacy.WireServices() {
+		for _, operation := range service.Operations {
+			if err := visit(service, operation); err != nil {
+				return nil, err
 			}
 		}
 	}
