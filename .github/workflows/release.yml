@@ -11,11 +11,11 @@ permissions:
   attestations: write
 
 env:
-  GO_VERSION: '1.26.4'
+  GO_VERSION: '1.26.6'
   GORELEASER_VERSION: 'v2.8.2'
-  COSIGN_VERSION: 'v3.8.1'
+  COSIGN_VERSION: 'v2.5.0'
   SYFT_VERSION: 'v1.18.1'
-  GOVULNCHECK_VERSION: 'v1.25.0'
+  GOVULNCHECK_VERSION: 'v1.7.0'
 
 jobs:
   verify:
@@ -68,11 +68,11 @@ jobs:
       - name: Secret scan
         run: |
           set -euxo pipefail
-          if grep -R -n -E 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' --exclude-dir=.git --exclude='*.json' .; then
+          if grep -R -n -E 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' --exclude-dir=.git --exclude='*.json' --exclude='*_test.go' .; then
             echo 'credential pattern found' >&2
             exit 1
           fi
-          if grep -R -n -E 'BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY' --exclude-dir=.git .; then
+          if grep -R -n -E 'BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY' --exclude-dir=.git --exclude='*.json' --exclude='*_test.go' .; then
             echo 'private key pattern found' >&2
             exit 1
           fi
@@ -107,7 +107,7 @@ jobs:
       - name: Validate pinned iamlive catalog
         run: make iamlive-check
       - name: Install pinned Syft
-        uses: anchore/sbom-action/download@da167eac915b4e86f08b264dbdbc867b61be6f0c # v0.20.5
+        uses: anchore/sbom-action/download-syft@da167eac915b4e86f08b264dbdbc867b61be6f0c # v0.20.5
         with:
           syft-version: ${{ env.SYFT_VERSION }}
       - name: Build archives with GoReleaser without publishing

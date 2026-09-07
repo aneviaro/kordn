@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.26.4'
+  GO_VERSION: '1.26.6'
   AWSCLI_VERSION: '2.27.50'
   TERRAFORM_VERSION: '1.12.2'
   AWS_PROVIDER_VERSION: '6.0.0'

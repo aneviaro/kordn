@@ -1,6 +1,6 @@
 module github.com/kordn-ai/kordn
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.37.2
@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.36.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.yaml.in/yaml/v3 v3.0.4
-	golang.org/x/net v0.21.0
+	golang.org/x/net v0.55.0
 )
 
 require (
@@ -22,6 +22,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.24.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.28.12 // indirect
 	github.com/aws/smithy-go v1.22.5 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20161208181325-20d25e280405 // indirect
 )
