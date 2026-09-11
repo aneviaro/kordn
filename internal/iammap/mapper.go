@@ -23,11 +23,10 @@ type MapperOptions struct {
 }
 
 type mapperAdapter interface {
-	Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error)
 	Version() string
 }
 type wireLookupAdapter interface {
-	LookupRequest(string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error)
+	LookupRequestContext(context.Context, string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error)
 }
 
 type Mapper struct {
@@ -131,10 +130,6 @@ func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) 
 	if op == "" {
 		return nil, errors.New("operation evidence is unknown")
 	}
-	wire, ok := m.adapter.(wireLookupAdapter)
-	if !ok {
-		return nil, errors.New("request-aware adapter is required")
-	}
 	identity := iamliveadapter.WireIdentity{Protocol: req.Protocol, Method: req.Method, Path: req.CanonicalPath, Query: req.CanonicalQuery}
 	if req.Protocol == awsrequest.ProtocolJSON10 || req.Protocol == awsrequest.ProtocolJSON11 {
 		if req.Headers == nil {
@@ -146,34 +141,28 @@ func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) 
 		}
 		identity.Target = targets[0]
 	}
-	lookup, e := wire.LookupRequest(req.Service, op, identity, req.Parameters)
-	if e != nil {
-		return nil, fmt.Errorf("unknown operation %s:%s: %w", req.Service, op, e)
+	wire, ok := m.adapter.(wireLookupAdapter)
+	if !ok {
+		return nil, errors.New("context-aware request adapter is required")
 	}
-	entry := lookup.Entry
-	canonical := entry.Operation
-	if len(lookup.Primary) == 0 {
-		return nil, errors.New("iamlive primary action set disagrees")
+	lookup, lookupErr := wire.LookupRequestContext(ctx, req.Service, op, identity, req.Parameters)
+	if lookupErr != nil {
+		return nil, fmt.Errorf("unknown operation %s:%s: %w", req.Service, op, lookupErr)
 	}
-	entries := lookup.PrimaryEntries
-	if len(entries) == 0 {
-		entries = []data.Entry{entry}
+	canonical := lookup.Operation
+	primaries := lookup.PrimaryOccurrences
+	if canonical == "" || len(primaries) == 0 {
+		return nil, errors.New("iamlive primary occurrence set disagrees")
 	}
-	if len(entries) != len(lookup.Primary) {
-		return nil, errors.New("iamlive primary action/record multiplicity disagrees")
-	}
-	reqs := make([]awsrequest.IAMRequirement, 0, len(entries))
-	for i, primary := range lookup.Primary {
-		rawAction := primary.Service + ":" + primary.Name
+	reqs := make([]awsrequest.IAMRequirement, 0, len(primaries))
+	var expectedDependencies []string
+	for _, primary := range primaries {
+		rawAction := primary.Action.Service + ":" + primary.Action.Name
 		action := canonicalAction(rawAction)
-		if action == "" {
+		if action == "" || primary.Operation != canonical {
 			return nil, errors.New("iamlive and authorization action disagree")
 		}
-		pe := entries[i]
-		if pe.Action != rawAction || pe.Service != entry.Service || pe.Operation != entry.Operation {
-			return nil, errors.New("iamlive primary record disagrees")
-		}
-		res, scope, e := resourceFor(req, pe.Resource, action)
+		res, scope, e := resourceForPrimaryContext(ctx, req, primary, action)
 		if e != nil {
 			return nil, e
 		}
@@ -183,15 +172,16 @@ func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) 
 		if len(res) == 0 {
 			return nil, errors.New("primary resource is empty; mapping rejected")
 		}
-		if pe.Scope != "" && string(scope) != pe.Scope && !(pe.Scope == "exact" && scope == awsrequest.ScopeSet) {
+		if primary.Scope != "" && string(scope) != primary.Scope && !(primary.Scope == "exact" && scope == awsrequest.ScopeSet) {
 			return nil, errors.New("primary scope evidence disagrees")
 		}
 		reqs = append(reqs, awsrequest.IAMRequirement{Action: action, Resources: res, ScopeKind: scope})
+		expectedDependencies = append(expectedDependencies, primary.DefinitionDependencies...)
 	}
 	if e := ctx.Err(); e != nil {
 		return nil, errors.New("mapper timeout; request rejected")
 	}
-	deps, e := dependencies(req, entry, lookup.Dependencies, lookup.DependenciesCertain)
+	deps, e := dependencies(ctx, req, expectedDependencies, lookup.DependencyOccurrences)
 	if e != nil {
 		return nil, e
 	}

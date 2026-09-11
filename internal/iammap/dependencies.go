@@ -1,95 +1,115 @@
 package iammap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
-	"github.com/kordn-ai/kordn/internal/iammap/data"
 	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 )
 
-// dependencies accounts for raw dependency occurrences. It does not turn a
-// missing or conditionally inapplicable occurrence into a wildcard grant.
-func dependencies(req *awsrequest.DecodedAWSRequest, entry data.Entry, candidates []iamliveadapter.DependencyCandidate, certain bool) ([]awsrequest.IAMRequirement, error) {
-	if !certain {
-		return nil, errors.New("uncertain dependent-action evidence")
+// dependencies evaluates occurrence-bound dependency evidence. Matching is by
+// action multiplicity, never by position; inapplicable occurrences are
+// retained for the count and unknown occurrences fail closed.
+func dependencies(ctx context.Context, req *awsrequest.DecodedAWSRequest, expected []string, candidates []iamliveadapter.DependencyOccurrence) ([]awsrequest.IAMRequirement, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	used := make([]bool, len(candidates))
-	result := []awsrequest.IAMRequirement{}
-	for _, wanted := range entry.Dependencies {
+	expectedCounts := map[string]int{}
+	order := []string{}
+	for _, wanted := range expected {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		want := canonicalAction(wanted)
 		if want == "" {
 			return nil, fmt.Errorf("unknown dependent permission %q", wanted)
 		}
-		var active, inactive []int
-		for i, candidate := range candidates {
-			if used[i] || canonicalAction(candidate.Action.Service+":"+candidate.Action.Name) != want {
-				continue
-			}
-			if candidate.ProvenInapplicable {
-				inactive = append(inactive, i)
-			} else {
-				active = append(active, i)
-			}
+		if expectedCounts[want] == 0 {
+			order = append(order, want)
 		}
-		if len(active) == 0 {
-			if len(inactive) > 0 {
-				for _, i := range inactive {
-					used[i] = true
-				}
-				continue
-			}
-			return nil, fmt.Errorf("iamlive dependency set disagrees: missing %s", wanted)
-		}
-		for _, i := range inactive {
-			used[i] = true
-		}
-		var names, actual []string
-		for _, i := range active {
-			used[i] = true
-			names = append(names, candidates[i].ParameterNames...)
-			actual = append(actual, candidates[i].Resources...)
-		}
-		if len(names) == 0 {
-			names = []string{"Role", "RoleArn", "TaskRoleArn", "ExecutionRoleArn", "IamRoleArn"}
-		}
-		expected := iamliveadapter.Find(req.Parameters, names...)
-		if len(expected) == 0 || len(expected) != len(actual) {
-			return nil, errors.New("iamlive dependency resources disagree")
-		}
-		for i, value := range expected {
-			expected[i], _ = validateDependencyARN(want, value, req.Partition)
-			if expected[i] == "" {
-				return nil, errors.New("malformed dependent ARN")
-			}
-		}
-		for i, value := range actual {
-			actual[i], _ = validateDependencyARN(want, value, req.Partition)
-			if actual[i] == "" {
-				return nil, errors.New("malformed dependent ARN")
-			}
-		}
-		sort.Strings(expected)
-		sort.Strings(actual)
-		if !sameStrings(expected, actual) {
-			return nil, errors.New("iamlive dependency resources disagree")
-		}
-		scope := awsrequest.ScopeExact
-		if len(actual) > 1 {
-			scope = awsrequest.ScopeSet
-		}
-		result = append(result, awsrequest.IAMRequirement{Action: want, Resources: actual, ScopeKind: scope, Dependent: true})
+		expectedCounts[want]++
 	}
-	for i, candidate := range candidates {
-		if !used[i] {
-			return nil, fmt.Errorf("extra dependent mapping %s:%s", candidate.Action.Service, candidate.Action.Name)
+	candidateCounts := map[string]int{}
+	grouped := map[string][]iamliveadapter.DependencyOccurrence{}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		want := canonicalAction(candidate.Action.Service + ":" + candidate.Action.Name)
+		if want == "" {
+			return nil, errors.New("unknown dependent permission occurrence")
+		}
+		if candidate.Applicability == iamliveadapter.ApplicabilityUnknown {
+			return nil, errors.New("uncertain dependent-action applicability")
+		}
+		candidateCounts[want]++
+		grouped[want] = append(grouped[want], candidate)
+	}
+	if len(candidateCounts) != len(expectedCounts) {
+		return nil, errors.New("iamlive dependency set disagrees")
+	}
+	for action, count := range expectedCounts {
+		if candidateCounts[action] != count {
+			return nil, fmt.Errorf("iamlive dependency occurrence multiplicity disagrees: %s", action)
+		}
+	}
+	for action := range candidateCounts {
+		if expectedCounts[action] == 0 {
+			return nil, fmt.Errorf("extra dependent mapping %s", action)
+		}
+	}
+
+	result := make([]awsrequest.IAMRequirement, 0, len(candidates))
+	for _, want := range order {
+		for _, candidate := range grouped[want] {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if candidate.Applicability == iamliveadapter.ApplicabilityInapplicable {
+				continue
+			}
+			names := candidate.ParameterNames
+			if len(names) == 0 {
+				names = []string{"Role", "RoleArn", "TaskRoleArn", "ExecutionRoleArn", "IamRoleArn"}
+			}
+			expectedResources := iamliveadapter.Find(req.Parameters, names...)
+			actual := append([]string(nil), candidate.Resources...)
+			if len(expectedResources) == 0 || len(expectedResources) != len(actual) {
+				return nil, errors.New("iamlive dependency resources disagree")
+			}
+			for i, value := range expectedResources {
+				var err error
+				expectedResources[i], err = validateDependencyARN(want, value, req.Partition)
+				if err != nil || expectedResources[i] == "" {
+					return nil, errors.New("malformed dependent ARN")
+				}
+			}
+			for i, value := range actual {
+				var err error
+				actual[i], err = validateDependencyARN(want, value, req.Partition)
+				if err != nil || actual[i] == "" {
+					return nil, errors.New("malformed dependent ARN")
+				}
+			}
+			sort.Strings(expectedResources)
+			sort.Strings(actual)
+			if !sameStrings(expectedResources, actual) {
+				return nil, errors.New("iamlive dependency resources disagree")
+			}
+			scope := awsrequest.ScopeExact
+			if len(actual) > 1 {
+				scope = awsrequest.ScopeSet
+			}
+			result = append(result, awsrequest.IAMRequirement{Action: want, Resources: actual, ScopeKind: scope, Dependent: true})
 		}
 	}
 	return result, nil
 }
+
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -101,6 +121,7 @@ func sameStrings(a, b []string) bool {
 	}
 	return true
 }
+
 func validateDependencyARN(action, value, partition string) (string, error) {
 	if canonicalAction(action) == "iam:PassRole" {
 		return validateRoleARN(value, partition)
@@ -143,6 +164,7 @@ func invalidNamedValue(parameters map[string]awsrequest.Value, names ...string) 
 	}
 	return walk(parameters, 0)
 }
+
 func validateRoleARN(v, partition string) (string, error) {
 	if len(v) > 2048 || strings.ContainsAny(v, "\x00\r\n*?\\") || !validPartition(partition) {
 		return "", errors.New("malformed PassRole ARN")

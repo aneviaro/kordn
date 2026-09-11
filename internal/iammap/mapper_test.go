@@ -233,7 +233,7 @@ type panicAdapter struct{}
 func (panicAdapter) Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	panic("test panic")
 }
-func (panicAdapter) LookupRequest(string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+func (panicAdapter) LookupRequestContext(context.Context, string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	panic("test panic")
 }
 func (panicAdapter) Version() string { return iamliveadapter.AdapterVersion }
@@ -244,7 +244,7 @@ func (a blockingAdapter) Lookup(string, string, ...map[string]awsrequest.Value) 
 	<-a.release
 	return iamliveadapter.LookupResult{}, errors.New("test adapter released")
 }
-func (a blockingAdapter) LookupRequest(string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+func (a blockingAdapter) LookupRequestContext(context.Context, string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	<-a.release
 	return iamliveadapter.LookupResult{}, errors.New("test adapter released")
 }

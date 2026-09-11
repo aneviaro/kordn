@@ -12,9 +12,8 @@ import (
 // adapter first, then introduces disagreement for the fail-closed checks.
 type crosscheckAdapter struct {
 	real          *iamliveadapter.Adapter
-	primary       []iamliveadapter.Action
-	dependencies  []iamliveadapter.DependencyCandidate
-	certain       bool
+	primary       []iamliveadapter.PrimaryOccurrence
+	dependencies  []iamliveadapter.DependencyOccurrence
 	changePrimary bool
 	changeDeps    bool
 }
@@ -22,17 +21,16 @@ type crosscheckAdapter struct {
 func (a crosscheckAdapter) Lookup(service, operation string, parameters ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	return a.real.Lookup(service, operation, parameters...)
 }
-func (a crosscheckAdapter) LookupRequest(service, operation string, identity iamliveadapter.WireIdentity, parameters map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
-	result, err := a.real.LookupRequest(service, operation, identity, parameters)
+func (a crosscheckAdapter) LookupRequestContext(ctx context.Context, service, operation string, identity iamliveadapter.WireIdentity, parameters map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	result, err := a.real.LookupRequestContext(ctx, service, operation, identity, parameters)
 	if err != nil {
 		return result, err
 	}
 	if a.changePrimary {
-		result.Primary = a.primary
+		result.PrimaryOccurrences = a.primary
 	}
 	if a.changeDeps {
-		result.Dependencies = a.dependencies
-		result.DependenciesCertain = a.certain
+		result.DependencyOccurrences = a.dependencies
 	}
 	return result, nil
 }
@@ -47,7 +45,7 @@ func TestMapperRejectsInjectedPrimaryActionDisagreement(t *testing.T) {
 	// changes the independent primary evidence.
 	wrapped := crosscheckAdapter{
 		real:          real,
-		primary:       []iamliveadapter.Action{{Service: "ec2", Name: "TerminateInstances"}},
+		primary:       []iamliveadapter.PrimaryOccurrence{{Action: iamliveadapter.Action{Service: "ec2", Name: "TerminateInstances"}}},
 		changePrimary: true,
 	}
 	m, err := newMapperForTest(MapperOptions{}, wrapped)
@@ -65,7 +63,7 @@ func TestMapperRejectsInjectedDependencyDisagreement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrapped := crosscheckAdapter{real: real, changeDeps: true, certain: true}
+	wrapped := crosscheckAdapter{real: real, changeDeps: true}
 	m, err := newMapperForTest(MapperOptions{}, wrapped)
 	if err != nil {
 		t.Fatal(err)
