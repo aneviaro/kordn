@@ -33,6 +33,42 @@ func TestVersionFacadeUsesPinnedCatalog(t *testing.T) {
 	}
 }
 
+func TestCompatibilityIterationUsesCompiledPlans(t *testing.T) {
+	c, err := iamlivecatalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	if err := c.ForEachOperationOccurrence(func(occurrence iamlivecatalog.OperationOccurrence) error {
+		count++
+		if occurrence.Plan.Occurrence == 0 {
+			t.Fatal("operation occurrence has no static plan identity")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("compatibility iterator visited no operations")
+	}
+}
+
+func TestValidateEntryRejectsStaticDisagreement(t *testing.T) {
+	if err := ValidateEntry(Entry{Service: "lambda", Operation: "CreateFunction", Action: "lambda:CreateFunction", Resource: "function*", Scope: "exact"}); err == nil || !strings.Contains(err.Error(), "static validation") {
+		t.Fatalf("invalid static plan was accepted: %v", err)
+	}
+}
+
+func TestNoWideningRejectsDuplicateOccurrencesAndMultiplicityChanges(t *testing.T) {
+	base := []Entry{{Service: "svc", Operation: "Op", Action: "svc:Op", Resource: "global", Scope: "known_global", Dependencies: []string{"iam:PassRole", "iam:PassRole"}}}
+	if err := CheckNoWidening(base, []Entry{{Service: "svc", Operation: "Op", Action: "svc:Op", Resource: "global", Scope: "known_global", Dependencies: []string{"iam:PassRole"}}}); err == nil {
+		t.Fatal("dependency multiplicity change was accepted")
+	}
+	if err := CheckNoWidening(base, append(append([]Entry(nil), base...), base[0])); err == nil {
+		t.Fatal("duplicate operation occurrence was accepted")
+	}
+}
+
 func TestCompatibilityFacadeEquivalenceAndDefensiveCopies(t *testing.T) {
 	entries, err := Entries()
 	if err != nil {

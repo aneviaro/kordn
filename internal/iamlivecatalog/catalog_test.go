@@ -1047,6 +1047,61 @@ func TestCatalogSelectorsRejectOverflowAndExactEndForEveryNestedSpan(t *testing.
 	}
 }
 
+func TestStaticPlanDiagnosticsAreLocalizedAndDefensive(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lambda := c.OperationOccurrences("lambda", "CreateFunction")
+	if len(lambda) != 1 || lambda[0].Plan.Valid() {
+		t.Fatalf("Lambda disagreement was accepted: %+v", lambda)
+	}
+	found := false
+	for _, d := range lambda[0].Plan.Diagnostics {
+		if d.Code == ValidationIncomplete && d.Action == "lambda:passcapacityprovider" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Lambda diagnostic missing: %+v", lambda[0].Plan.Diagnostics)
+	}
+	other := c.OperationOccurrences("lambda", "Invoke")
+	if len(other) != 1 || !other[0].Plan.Valid() {
+		t.Fatalf("unrelated operation was poisoned: %+v", other)
+	}
+	fresh := c.OperationOccurrences("lambda", "CreateFunction")
+	fresh[0].Plan.Diagnostics[0].Action = "mutated"
+	again := c.OperationOccurrences("lambda", "CreateFunction")
+	if again[0].Plan.Diagnostics[0].Action == "mutated" {
+		t.Fatal("returned plan aliases catalog storage")
+	}
+}
+
+func TestStaticPlanExactDuplicateEdgeAgreement(t *testing.T) {
+	mapping := func(id occurrenceID, action string) ActionMapping {
+		return ActionMapping{occurrenceID: id, Action: action, State: EvidenceKnown}
+	}
+	resource := ResourceType{occurrenceID: 20, DependentActions: []string{"synthetic:Child", "synthetic:Child"}, dependentActionIDs: []occurrenceID{21, 22}}
+	defs := map[string][]ActionDefinition{
+		"synthetic\x00root":  {{occurrenceID: 1, Service: "synthetic", Name: "Root", State: EvidenceKnown, Resources: []ResourceType{resource}}},
+		"synthetic\x00child": {{occurrenceID: 2, Service: "synthetic", Name: "Child", State: EvidenceKnown}},
+	}
+	valid := compileStaticPlan("synthetic", Operation{occurrenceID: 3, Name: "Op", State: EvidenceKnown, MappingState: EvidenceKnown, Mappings: []ActionMapping{mapping(4, "synthetic:Root"), mapping(5, "synthetic:Child"), mapping(6, "synthetic:Child")}}, nil, defs)
+	if !valid.Valid() || len(valid.Mappings) != 3 {
+		t.Fatalf("duplicate dependency occurrences collapsed: %+v", valid)
+	}
+	extra := compileStaticPlan("synthetic", Operation{occurrenceID: 3, Name: "Op", State: EvidenceKnown, MappingState: EvidenceKnown, Mappings: []ActionMapping{mapping(4, "synthetic:Root"), mapping(5, "synthetic:Child"), mapping(6, "synthetic:Child"), mapping(7, "synthetic:Child")}}, nil, defs)
+	found := false
+	for _, d := range extra.Diagnostics {
+		if d.Code == ValidationExtra && d.Occurrence == 7 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("extra duplicate edge was accepted: %+v", extra.Diagnostics)
+	}
+}
+
 func TestCatalogIndexesEveryAPIOperation(t *testing.T) {
 	c, err := Load()
 	if err != nil {

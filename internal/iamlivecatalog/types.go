@@ -15,6 +15,59 @@ const CatalogSchemaVersion = "iamlive-catalog-schema/v2"
 // consumers instead of silently manufacturing a wildcard or a default.
 type EvidenceState string
 
+// ValidationCode identifies request-independent catalog evidence failures.
+type ValidationCode string
+
+const (
+	ValidationMissing       ValidationCode = "missing"
+	ValidationContradictory ValidationCode = "contradictory"
+	ValidationAmbiguous     ValidationCode = "ambiguous"
+	ValidationCyclic        ValidationCode = "cyclic"
+	ValidationExtra         ValidationCode = "extra"
+	ValidationIncomplete    ValidationCode = "incomplete"
+)
+
+type ValidationDiagnostic struct {
+	Code          ValidationCode
+	Service       string
+	Operation     string
+	Action        string
+	RelatedAction string
+	Occurrence    uint32
+	RelatedOccur  uint32
+	Detail        string
+}
+
+type ActionReference struct{ Service, Name string }
+
+type StaticMapping struct {
+	Action     ActionReference
+	Mapping    ActionMapping
+	Definition ActionDefinition
+	Dependent  bool
+}
+
+func (m StaticMapping) Occurrence() uint32 { return uint32(m.Mapping.occurrenceID) }
+
+type StaticPlan struct {
+	Service     string
+	Operation   string
+	Occurrence  uint32
+	Mappings    []StaticMapping
+	Diagnostics []ValidationDiagnostic
+}
+
+func (p StaticPlan) Clone() StaticPlan {
+	p.Mappings = append([]StaticMapping(nil), p.Mappings...)
+	for i := range p.Mappings {
+		p.Mappings[i].Mapping = p.Mappings[i].Mapping.Clone()
+		p.Mappings[i].Definition = p.Mappings[i].Definition.Clone()
+	}
+	p.Diagnostics = append([]ValidationDiagnostic(nil), p.Diagnostics...)
+	return p
+}
+func (p StaticPlan) Valid() bool { return len(p.Diagnostics) == 0 }
+
 const (
 	EvidenceKnown          EvidenceState = "known"
 	EvidenceAbsent         EvidenceState = "absent"
@@ -38,6 +91,7 @@ type Catalog struct {
 	operations              map[string][]indexedOperation
 	operationOccurrences    map[string][]operationPosition
 	serviceOperationIndexes [][]compactOperationPosition
+	plans                   map[occurrenceID]StaticPlan
 	// buildActions and buildActionOrder exist only while the parser converts
 	// source definitions into compact records; compactEvidence clears them
 	// before publication.
@@ -102,6 +156,7 @@ type compactStore struct {
 	mapPairs         []compactMapPair
 	queryRecords     []compactQuery
 	refs             []stringID
+	compactPlans     map[occurrenceID]compactPlan
 }
 
 type compactService struct {
@@ -184,6 +239,16 @@ type compactDependent struct {
 	occurrence occurrenceID
 	action     stringID
 }
+type compactStaticMapping struct {
+	mapping, action int
+	dependent       bool
+}
+type compactPlan struct {
+	service, operation stringID
+	occurrence         occurrenceID
+	mappings           []compactStaticMapping
+	diagnostics        []ValidationDiagnostic
+}
 
 type Service struct {
 	Key, ID, EndpointPrefix, SigningName, TargetPrefix, APIVersion string
@@ -216,6 +281,7 @@ type WireOperation struct {
 type OperationOccurrence struct {
 	Service   WireService
 	Operation Operation
+	Plan      StaticPlan
 }
 
 type operationPosition struct {
@@ -358,6 +424,7 @@ func (o WireOperation) Clone() WireOperation {
 func (o OperationOccurrence) Clone() OperationOccurrence {
 	o.Service = o.Service.Clone()
 	o.Operation = o.Operation.Clone()
+	o.Plan = o.Plan.Clone()
 	return o
 }
 func (o Operation) Clone() Operation {

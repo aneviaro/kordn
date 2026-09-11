@@ -39,11 +39,10 @@ type LookupResult struct {
 }
 
 // catalogDependency is the immutable, narrow catalog view needed by this
-// consumer. OperationOccurrences returns defensive operation copies and Action
-// returns defensive definition copies at the catalog boundary.
+// consumer. Static plans are compiled before publication and copied at the
+// catalog boundary.
 type catalogDependency interface {
 	OperationOccurrences(string, string) []iamlivecatalog.OperationOccurrence
-	Action(string) (iamlivecatalog.ActionDefinition, error)
 }
 
 type Adapter struct{ catalog catalogDependency }
@@ -90,7 +89,7 @@ func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity
 		return LookupResult{}, fmt.Errorf("incomplete wire identity")
 	}
 	occurrences := a.catalog.OperationOccurrences(service, op)
-	selected := make([]iamlivecatalog.Operation, 0, len(occurrences))
+	selected := make([]iamlivecatalog.OperationOccurrence, 0, len(occurrences))
 	for _, occurrence := range occurrences {
 		record := occurrence.Operation
 		if record.State != iamlivecatalog.EvidenceKnown {
@@ -105,7 +104,7 @@ func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity
 		}
 		// OperationOccurrences already deep-copies the selected evidence. Keep
 		// only matching records so request work remains bounded to this bucket.
-		selected = append(selected, record)
+		selected = append(selected, occurrence)
 	}
 	if len(selected) != 1 {
 		if len(selected) == 0 {
@@ -113,7 +112,7 @@ func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity
 		}
 		return LookupResult{}, fmt.Errorf("ambiguous operation")
 	}
-	return a.lookupOperation(service, selected[0], parameters)
+	return a.lookupOperation(service, selected[0].Operation, selected[0].Plan, parameters)
 }
 
 func recordProtocol(protocol, version string) (awsrequest.AWSProtocol, bool) {
@@ -205,11 +204,10 @@ func (a *Adapter) Lookup(service, operation string, parameters ...map[string]aws
 	if len(parameters) == 1 {
 		p = parameters[0]
 	}
-	return a.lookupOperation(service, occurrences[0].Operation, p)
+	return a.lookupOperation(service, occurrences[0].Operation, occurrences[0].Plan, p)
 }
 
 type mappingRecord struct {
-	index        int
 	action       Action
 	definition   iamlivecatalog.ActionDefinition
 	mapping      iamlivecatalog.ActionMapping
@@ -217,26 +215,27 @@ type mappingRecord struct {
 	dependent    bool
 }
 
-func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Operation, parameters map[string]awsrequest.Value) (LookupResult, error) {
-	if operation.State != iamlivecatalog.EvidenceKnown {
-		return LookupResult{}, fmt.Errorf("operation evidence unavailable: %s", operation.State)
+func runtimePlanUsable(plan iamlivecatalog.StaticPlan) bool { return plan.Valid() }
+
+func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Operation, plan iamlivecatalog.StaticPlan, parameters map[string]awsrequest.Value) (LookupResult, error) {
+	if !runtimePlanUsable(plan) {
+		if len(plan.Diagnostics) == 0 {
+			return LookupResult{}, fmt.Errorf("static catalog plan unavailable")
+		}
+		d := plan.Diagnostics[0]
+		return LookupResult{}, fmt.Errorf("static catalog validation failed: %s: %s: %s", d.Code, d.Action, d.Detail)
 	}
-	if operation.MappingState != iamlivecatalog.EvidenceKnown || len(operation.Mappings) == 0 {
-		return LookupResult{}, fmt.Errorf("operation mapping evidence unavailable: %s", operation.MappingState)
+	if operation.State != iamlivecatalog.EvidenceKnown || operation.MappingState != iamlivecatalog.EvidenceKnown || len(plan.Mappings) == 0 {
+		return LookupResult{}, fmt.Errorf("operation static evidence unavailable")
 	}
-	records := make([]mappingRecord, 0, len(operation.Mappings))
-	for i, raw := range operation.Mappings {
-		if raw.State != iamlivecatalog.EvidenceKnown {
-			return LookupResult{}, fmt.Errorf("mapping action evidence unavailable: %s", raw.State)
+	records := make([]mappingRecord, 0, len(plan.Mappings))
+	var roots []mappingRecord
+	for _, compiled := range plan.Mappings {
+		raw := compiled.Mapping
+		if compiled.Action.Service == "" || compiled.Action.Name == "" {
+			return LookupResult{}, fmt.Errorf("static catalog plan contains malformed action")
 		}
-		action, ok := parseAction(raw.Action)
-		if !ok {
-			return LookupResult{}, fmt.Errorf("malformed action mapping")
-		}
-		definition, err := a.catalog.Action(raw.Action)
-		if err != nil || definition.State != iamlivecatalog.EvidenceKnown {
-			return LookupResult{}, fmt.Errorf("action definition evidence unavailable: %s", raw.Action)
-		}
+		action := Action{Service: compiled.Action.Service, Name: compiled.Action.Name}
 		state := conditionTrue
 		if raw.Condition != nil {
 			state = evaluateCondition(raw.Condition, parameters)
@@ -244,14 +243,14 @@ func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Opera
 		if state == conditionUnknown {
 			return LookupResult{}, fmt.Errorf("mapping condition evidence unavailable: %s", raw.Action)
 		}
-		records = append(records, mappingRecord{index: i, action: action, definition: definition, mapping: raw, inapplicable: state == conditionFalse})
+		record := mappingRecord{action: action, definition: compiled.Definition, mapping: raw, inapplicable: state == conditionFalse, dependent: compiled.Dependent}
+		records = append(records, record)
+		if !compiled.Dependent && !record.inapplicable {
+			roots = append(roots, record)
+		}
 	}
-	roots := findRoots(records)
 	if len(roots) == 0 {
 		return LookupResult{}, fmt.Errorf("mapping has no primary action")
-	}
-	if err := a.validateGraph(records, roots, parameters); err != nil {
-		return LookupResult{}, err
 	}
 
 	var primary []Action
@@ -301,166 +300,6 @@ func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Opera
 		entry.Dependencies = append([]string(nil), allDefinitionDeps...)
 	}
 	return LookupResult{Entry: entry, Primary: primary, PrimaryEntries: entries, Dependencies: dependencies, DependenciesCertain: certain}, nil
-}
-
-func parseAction(value string) (Action, bool) {
-	parts := strings.Split(value, ":")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(value, " \t\r\n") {
-		return Action{}, false
-	}
-	return Action{Service: parts[0], Name: parts[1]}, true
-}
-func actionKey(action Action) string {
-	return strings.ToLower(action.Service) + ":" + strings.ToLower(action.Name)
-}
-func definitionEdges(definition iamlivecatalog.ActionDefinition) []string {
-	var out []string
-	for _, r := range definition.Resources {
-		out = append(out, r.DependentActions...)
-	}
-	return out
-}
-
-func findRoots(records []mappingRecord) []mappingRecord {
-	possible := map[string]bool{}
-	for _, r := range records {
-		for _, edge := range definitionEdges(r.definition) {
-			if target, ok := parseAction(edge); ok {
-				possible[actionKey(target)] = true
-			}
-		}
-	}
-	var roots []mappingRecord
-	for i := range records {
-		// Classify the raw occurrence from graph evidence before applying its
-		// condition. An inapplicable dependent occurrence still accounts for an
-		// edge and must be emitted as inapplicable evidence.
-		records[i].dependent = possible[actionKey(records[i].action)]
-		if records[i].inapplicable {
-			continue
-		}
-		if !records[i].dependent {
-			roots = append(roots, records[i])
-		}
-	}
-	return roots
-}
-
-// validateGraph ensures all definitions reachable from the selected primary
-// records are known, acyclic, and represented by raw mapping occurrences.
-func (a *Adapter) validateGraph(records []mappingRecord, roots []mappingRecord, parameters map[string]awsrequest.Value) error {
-	colors := map[string]uint8{}
-	var visit func(Action, iamlivecatalog.ActionDefinition) error
-	visit = func(action Action, definition iamlivecatalog.ActionDefinition) error {
-		key := actionKey(action)
-		if colors[key] == 1 {
-			return fmt.Errorf("dependent action cycle: %s", key)
-		}
-		if colors[key] == 2 {
-			return nil
-		}
-		colors[key] = 1
-		for _, raw := range definitionEdges(definition) {
-			target, ok := parseAction(raw)
-			if !ok {
-				return fmt.Errorf("malformed dependent action %q", raw)
-			}
-			td, err := a.catalog.Action(raw)
-			if err != nil || td.State != iamlivecatalog.EvidenceKnown {
-				return fmt.Errorf("unknown or contradictory dependent action %q", raw)
-			}
-			if err := visit(target, td); err != nil {
-				return err
-			}
-		}
-		colors[key] = 2
-		return nil
-	}
-	for _, root := range roots {
-		if err := visit(root.action, root.definition); err != nil {
-			return err
-		}
-	}
-
-	used := map[int]bool{}
-	for _, r := range records {
-		if r.inapplicable {
-			used[r.index] = true
-		}
-	}
-	for _, root := range roots {
-		used[root.index] = true
-	}
-	inactive := map[string]int{}
-	for _, r := range records {
-		if r.dependent && mappingInapplicable(r.mapping, parameters) {
-			inactive[actionKey(r.action)]++
-			used[r.index] = true
-		}
-	}
-
-	var match func(Action, iamlivecatalog.ActionDefinition) error
-	match = func(source Action, definition iamlivecatalog.ActionDefinition) error {
-		for _, raw := range definitionEdges(definition) {
-			target, ok := parseAction(raw)
-			if !ok {
-				return fmt.Errorf("malformed dependent action %q", raw)
-			}
-			var found []int
-			for _, r := range records {
-				if r.dependent && !used[r.index] && actionKey(r.action) == actionKey(target) && !mappingInapplicable(r.mapping, parameters) {
-					found = append(found, r.index)
-				}
-			}
-			if len(found) == 0 {
-				if inactive[actionKey(target)] > 0 {
-					inactive[actionKey(target)]--
-					continue
-				}
-				return fmt.Errorf("missing dependent action mapping %s -> %s", actionKey(source), actionKey(target))
-			}
-			if len(found) > 1 {
-				for _, i := range found {
-					for _, r := range records {
-						if r.index == i && !conditionalMapping(r.mapping) {
-							return fmt.Errorf("dependent mapping multiplicity disagrees: %s", actionKey(target))
-						}
-					}
-				}
-			}
-			for _, i := range found {
-				used[i] = true
-				for _, r := range records {
-					if r.index == i {
-						if err := match(r.action, r.definition); err != nil {
-							return err
-						}
-						break
-					}
-				}
-			}
-		}
-		return nil
-	}
-	for _, root := range roots {
-		if err := match(root.action, root.definition); err != nil {
-			return err
-		}
-	}
-	for _, r := range records {
-		if !used[r.index] {
-			return fmt.Errorf("extra dependent/action mapping occurrence %s", actionKey(r.action))
-		}
-	}
-	return nil
-}
-
-func conditionalMapping(mapping iamlivecatalog.ActionMapping) bool {
-	return mapping.Condition != nil || strings.Contains(strings.ToLower(mapping.ARNOverride), "iftruthy")
-}
-func mappingInapplicable(mapping iamlivecatalog.ActionMapping, parameters map[string]awsrequest.Value) bool {
-	_, state := dependencyValues(mapping, parameters)
-	return state == dependencyFalse
 }
 
 type conditionState uint8
