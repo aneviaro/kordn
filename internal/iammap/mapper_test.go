@@ -71,6 +71,12 @@ func TestGoldenMappings(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.s, func(t *testing.T) {
 			r, e := m.Map(context.Background(), goldenRequest(tc.s, tc.h, tc.r, tc.o, tc.p))
+			if tc.s == "ecs" {
+				if e == nil || r != nil || !strings.Contains(e.Error(), "static catalog validation failed") {
+					t.Fatalf("ECS multiset disagreement was not fail-closed: result=%+v err=%v", r, e)
+				}
+				return
+			}
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -141,17 +147,8 @@ func TestDependentPassRole(t *testing.T) {
 	m, _ := NewMapper()
 	r := goldenRequest("ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web"), "TaskRoleArn": str("arn:aws:iam::123456789012:role/task")})
 	x, e := m.Map(context.Background(), r)
-	if e != nil {
-		t.Fatal(e)
-	}
-	found := false
-	for _, q := range x.Requirements {
-		if q.Action == "iam:PassRole" {
-			found = q.Dependent && q.ScopeKind == awsrequest.ScopeExact
-		}
-	}
-	if !found {
-		t.Fatalf("PassRole absent: %+v", x.Requirements)
+	if e == nil || x != nil || !strings.Contains(e.Error(), "static catalog validation failed") {
+		t.Fatalf("ECS multiset disagreement was not fail-closed: result=%+v err=%v", x, e)
 	}
 }
 func TestUnknownFailsClosed(t *testing.T) {
@@ -172,13 +169,8 @@ func TestNoScopeWidening(t *testing.T) {
 	}
 	r = goldenRequest("ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web")})
 	x, e = m.Map(context.Background(), r)
-	if e != nil || x == nil {
-		t.Fatalf("absent optional dependency was not represented as inapplicable: %v %+v", e, x)
-	}
-	for _, requirement := range x.Requirements {
-		if requirement.Action == "iam:PassRole" {
-			t.Fatalf("inapplicable dependency became requirement: %+v", x.Requirements)
-		}
+	if e == nil || x != nil || !strings.Contains(e.Error(), "static catalog validation failed") {
+		t.Fatalf("ECS multiset disagreement was not fail-closed: %v %+v", e, x)
 	}
 }
 func TestMapperPanicAndTimeoutFailClosed(t *testing.T) {

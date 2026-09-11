@@ -33,18 +33,19 @@ func Entries() ([]Entry, error) {
 	if e != nil {
 		return nil, e
 	}
-	seen := map[string]bool{}
 	out := []Entry{}
-	err := c.ForEachOperation(func(s string, o iamlivecatalog.Operation) error {
-		if c.OperationCardinality(s, o.Name) != 1 || o.State != iamlivecatalog.EvidenceKnown || o.MappingState != iamlivecatalog.EvidenceKnown || len(o.Mappings) == 0 {
+	err := c.ForEachOperationOccurrence(func(occurrence iamlivecatalog.OperationOccurrence) error {
+		s := occurrence.Service.EndpointPrefix
+		o := occurrence.Operation
+		if c.OperationCardinality(s, o.Name) != 1 || o.State != iamlivecatalog.EvidenceKnown || o.MappingState != iamlivecatalog.EvidenceKnown || !occurrence.Plan.Valid() || len(occurrence.Plan.Mappings) == 0 {
 			return nil
 		}
-		m := o.Mappings[0]
+		m := occurrence.Plan.Mappings[0].Mapping
 		if m.State != iamlivecatalog.EvidenceKnown || len(strings.SplitN(m.Action, ":", 2)) != 2 {
 			return nil
 		}
-		a, err := c.Action(m.Action)
-		if err != nil || a.State != iamlivecatalog.EvidenceKnown {
+		a := occurrence.Plan.Mappings[0].Definition
+		if a.State != iamlivecatalog.EvidenceKnown {
 			return nil
 		}
 		resource, scope := "global", "known_global"
@@ -64,11 +65,7 @@ func Entries() ([]Entry, error) {
 		}
 		sort.Strings(deps)
 		x := Entry{Service: strings.ToLower(s), Operation: o.Name, Action: m.Action, Resource: resource, Scope: scope, Dependencies: append([]string(nil), deps...)}
-		k := x.Service + "\x00" + x.Operation
-		if !seen[k] {
-			seen[k] = true
-			out = append(out, x)
-		}
+		out = append(out, x)
 		return nil
 	})
 	if err != nil {
@@ -101,49 +98,45 @@ func ValidateEntry(e Entry) error {
 	if operationRecordCount(c, e.Service, e.Operation) != 1 {
 		return fmt.Errorf("ambiguous catalog operation: %s:%s", e.Service, e.Operation)
 	}
-	o, err := c.Operation(e.Service, e.Operation)
-	if err != nil {
-		return err
+	occurrences := c.OperationOccurrences(e.Service, e.Operation)
+	if len(occurrences) != 1 {
+		return fmt.Errorf("catalog operation occurrence unavailable: %s:%s", e.Service, e.Operation)
 	}
-	if o.State != iamlivecatalog.EvidenceKnown {
-		return fmt.Errorf("catalog operation evidence is %s: %s:%s", o.State, e.Service, e.Operation)
+	op := occurrences[0].Operation
+	plan := occurrences[0].Plan
+	if op.State != iamlivecatalog.EvidenceKnown || op.MappingState != iamlivecatalog.EvidenceKnown || !plan.Valid() {
+		return fmt.Errorf("catalog static validation failed: %s:%s", e.Service, e.Operation)
 	}
-	if o.MappingState != iamlivecatalog.EvidenceKnown {
-		return fmt.Errorf("catalog operation mapping evidence is %s: %s:%s", o.MappingState, e.Service, e.Operation)
-	}
+	var a iamlivecatalog.ActionDefinition
 	found := false
-	for _, m := range o.Mappings {
-		if m.Action == e.Action {
-			if m.State != iamlivecatalog.EvidenceKnown {
-				return fmt.Errorf("catalog action mapping evidence is %s: %s", m.State, e.Action)
+	for _, compiled := range plan.Mappings {
+		if compiled.Mapping.Action == e.Action {
+			if compiled.Mapping.State != iamlivecatalog.EvidenceKnown {
+				return fmt.Errorf("catalog action mapping evidence is %s: %s", compiled.Mapping.State, e.Action)
 			}
-			found = true
+			a, found = compiled.Definition, true
 			break
 		}
 	}
-	if !found {
+	if !found || a.State != iamlivecatalog.EvidenceKnown {
 		return fmt.Errorf("catalog operation/action disagreement: %s:%s", e.Service, e.Operation)
 	}
-	a, err := c.Action(e.Action)
-	if err != nil {
-		return fmt.Errorf("catalog action unavailable: %w", err)
+	namedResources := make([]string, 0, len(a.Resources))
+	for _, r := range a.Resources {
+		if r.Name != "" {
+			namedResources = append(namedResources, r.Name)
+		}
 	}
 	if e.Resource == "global" {
-		for _, r := range a.Resources {
-			if r.Name != "" {
-				return fmt.Errorf("global resource metadata disagreement: %s", e.Action)
-			}
+		if len(namedResources) != 0 || e.Scope != "known_global" {
+			return fmt.Errorf("global resource metadata disagreement: %s", e.Action)
 		}
-	} else {
-		found = false
-		for _, r := range a.Resources {
-			if r.Name == e.Resource {
-				found = true
-			}
+	} else if len(namedResources) == 1 {
+		if namedResources[0] != e.Resource || e.Scope != "exact" {
+			return fmt.Errorf("catalog resource metadata disagreement: %s/%s", e.Action, e.Resource)
 		}
-		if !found {
-			return fmt.Errorf("catalog resource missing: %s/%s", e.Action, e.Resource)
-		}
+	} else if len(namedResources) <= 1 || namedResources[0] != e.Resource || e.Scope != "unresolved" {
+		return fmt.Errorf("catalog resource metadata disagreement: %s/%s", e.Action, e.Resource)
 	}
 	var need []string
 	for _, r := range a.Resources {
@@ -180,7 +173,11 @@ func BaselineEntries() ([]Entry, error) { return Entries() }
 func CheckNoWidening(base, candidate []Entry) error {
 	bm := map[string]Entry{}
 	for _, x := range base {
-		bm[x.Service+"\x00"+x.Operation] = x
+		k := x.Service + "\x00" + x.Operation
+		if _, ok := bm[k]; ok {
+			return fmt.Errorf("widening: duplicate operation %s", k)
+		}
+		bm[k] = x
 	}
 	cm := map[string]Entry{}
 	for _, x := range candidate {

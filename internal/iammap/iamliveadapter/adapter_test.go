@@ -19,6 +19,26 @@ func (c testCatalog) OperationOccurrences(string, string) []iamlivecatalog.Opera
 	out := make([]iamlivecatalog.OperationOccurrence, len(c.occurrences))
 	for i, occurrence := range c.occurrences {
 		out[i] = occurrence.Clone()
+		if len(out[i].Plan.Mappings) == 0 {
+			edges := map[string]bool{}
+			for _, definition := range c.actions {
+				for _, resource := range definition.Resources {
+					for _, edge := range resource.DependentActions {
+						edges[strings.ToLower(edge)] = true
+					}
+				}
+			}
+			for _, mapping := range out[i].Operation.Mappings {
+				parts := strings.SplitN(mapping.Action, ":", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				definition := c.actions[strings.ToLower(mapping.Action)]
+				out[i].Plan.Mappings = append(out[i].Plan.Mappings, iamlivecatalog.StaticMapping{Action: iamlivecatalog.ActionReference{Service: parts[0], Name: parts[1]}, Mapping: mapping.Clone(), Definition: definition.Clone(), Dependent: edges[strings.ToLower(mapping.Action)]})
+			}
+			out[i].Plan.Service = "test"
+			out[i].Plan.Operation = out[i].Operation.Name
+		}
 	}
 	return out
 }
@@ -211,17 +231,9 @@ func TestAbsentOptionalDependencyRemainsInapplicableEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := a.LookupRequest("ecs", "RunTask", WireIdentity{Protocol: awsrequest.ProtocolJSON11, Method: "POST", Path: "/", Target: "AmazonEC2ContainerServiceV20141113.RunTask"}, map[string]awsrequest.Value{"TaskDefinition": {Kind: awsrequest.ValueString, String: "web"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Dependencies) != 2 {
-		t.Fatalf("dependency occurrences were dropped: %+v", result.Dependencies)
-	}
-	for _, candidate := range result.Dependencies {
-		if !candidate.ProvenInapplicable {
-			t.Fatalf("missing inapplicable proof: %+v", result.Dependencies)
-		}
+	_, err = a.LookupRequest("ecs", "RunTask", WireIdentity{Protocol: awsrequest.ProtocolJSON11, Method: "POST", Path: "/", Target: "AmazonEC2ContainerServiceV20141113.RunTask"}, map[string]awsrequest.Value{"TaskDefinition": {Kind: awsrequest.ValueString, String: "web"}})
+	if err == nil || !strings.Contains(err.Error(), "static catalog validation failed") {
+		t.Fatalf("invalid conditional plan was reopened at request time: %v", err)
 	}
 }
 
@@ -237,11 +249,13 @@ func TestConditionFalseDependentActionMappingRetainsOccurrences(t *testing.T) {
 				t.Fatalf("expected one operation occurrence, got %d", len(occurrences))
 			}
 			op := occurrences[0].Operation
+			plan := occurrences[0].Plan
 			condition := &iamlivecatalog.Condition{LHS: "ConditionFalseDependency", Op: "Equals", RHS: "present"}
 			var dependencyIndex int
 			for i := range op.Mappings {
 				if op.Mappings[i].Action == "iam:PassRole" {
 					op.Mappings[i].Condition = condition
+					plan.Mappings[i].Mapping.Condition = condition
 					dependencyIndex = i
 					break
 				}
@@ -251,9 +265,10 @@ func TestConditionFalseDependentActionMappingRetainsOccurrences(t *testing.T) {
 			}
 			if duplicate {
 				op.Mappings = append(op.Mappings, op.Mappings[dependencyIndex])
+				plan.Mappings = append(plan.Mappings, plan.Mappings[dependencyIndex])
 			}
 
-			result, err := a.lookupOperation("omics", op, nil)
+			result, err := a.lookupOperation("omics", op, plan, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

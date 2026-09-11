@@ -340,6 +340,75 @@ func (c *Catalog) compactService(index int) (Service, bool) {
 	return out, true
 }
 
+func (c *Catalog) compactWireService(index int) (WireService, bool) {
+	if c == nil || c.store == nil || index < 0 || index >= len(c.store.services) {
+		return WireService{}, false
+	}
+	r := c.store.services[index]
+	endpoint, ok := compactString(c.store, r.endpoint)
+	if !ok {
+		return WireService{}, false
+	}
+	version, ok := compactString(c.store, r.apiVersion)
+	if !ok {
+		return WireService{}, false
+	}
+	target, ok := compactString(c.store, r.target)
+	if !ok {
+		return WireService{}, false
+	}
+	protocol, ok := compactString(c.store, r.protocol)
+	if !ok || !validSpan(r.protocols, len(c.store.refs)) || index >= len(c.store.serviceOps) {
+		return WireService{}, false
+	}
+	out := WireService{EndpointPrefix: endpoint, APIVersion: version, TargetPrefix: target, Protocol: protocol}
+	for i := uint32(0); i < r.protocols.count; i++ {
+		value, good := compactString(c.store, c.store.refs[r.protocols.start+i])
+		if !good {
+			return WireService{}, false
+		}
+		out.Protocols = append(out.Protocols, value)
+	}
+	return out, true
+}
+
+// ForEachOperationOccurrence visits each operation with its wire service and
+// prevalidated static plan in one bounded pass over immutable indexes.
+func (c *Catalog) ForEachOperationOccurrence(fn func(OperationOccurrence) error) error {
+	if c == nil || c.store == nil {
+		return errors.New("catalog unavailable")
+	}
+	if fn == nil {
+		return errors.New("operation occurrence visitor is nil")
+	}
+	for serviceIndex := range c.store.serviceOps {
+		service, ok := c.compactWireService(serviceIndex)
+		if !ok {
+			return errors.New("catalog service index is corrupt")
+		}
+		for _, position := range c.store.serviceOps[serviceIndex] {
+			if position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				return errors.New("catalog operation index is corrupt")
+			}
+			operation, ok := c.compactView(position.operation)
+			if !ok {
+				return errors.New("catalog operation canonical record is corrupt")
+			}
+			plan, ok := c.staticPlan(operation.occurrenceID)
+			if !ok {
+				return errors.New("catalog static plan index is corrupt")
+			}
+			if operation.Service != service.EndpointPrefix {
+				return errors.New("catalog operation service index is corrupt")
+			}
+			if err := fn(OperationOccurrence{Service: service.Clone(), Operation: operation, Plan: plan}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (c *Catalog) Services() []Service {
 	if c == nil || c.store == nil {
 		return nil
@@ -427,7 +496,11 @@ func (c *Catalog) OperationOccurrences(service, operation string) []OperationOcc
 		if !ok {
 			return nil
 		}
-		out = append(out, OperationOccurrence{Service: WireService{EndpointPrefix: serviceView.EndpointPrefix, APIVersion: serviceView.APIVersion, TargetPrefix: serviceView.TargetPrefix, Protocols: cloneStrings(serviceView.Protocols), Protocol: serviceView.Protocol}, Operation: view})
+		plan, ok := c.staticPlan(view.occurrenceID)
+		if !ok {
+			return nil
+		}
+		out = append(out, OperationOccurrence{Service: WireService{EndpointPrefix: serviceView.EndpointPrefix, APIVersion: serviceView.APIVersion, TargetPrefix: serviceView.TargetPrefix, Protocols: cloneStrings(serviceView.Protocols), Protocol: serviceView.Protocol}, Operation: view, Plan: plan})
 	}
 	return out
 }
@@ -1081,6 +1154,9 @@ func parse() (*Catalog, error) {
 			}
 		}
 	}
+	if err := cat.compileStaticPlans(); err != nil {
+		return nil, err
+	}
 	if err := cat.buildOccurrenceIndex(); err != nil {
 		return nil, err
 	}
@@ -1164,14 +1240,14 @@ func (s *compactStore) addCondition(c *Condition, intern func(string) (stringID,
 	return len(s.conditions) - 1, nil
 }
 
-// compactEvidence converts the temporary decoding graph into the only graph
-// retained by a loaded catalog. In particular, public compatibility structs
-// are not used as storage: all strings become IDs and all nested values become
-// checked spans into compact records.
+// compactEvidence converts the temporary decoding graph into the canonical
+// compact store retained by a loaded catalog. Public compatibility structs and
+// compiled plans are not retained as graphs: strings become IDs, nested values
+// become checked spans, and plans retain only occurrence references.
 func (c *Catalog) compactEvidence() error {
 	s := &compactStore{strings: c.strings, stringIndex: c.stringIndex,
 		operationIndex: map[string][]compactIndex{}, occurrences: map[string][]compactPosition{},
-		mappingIndex: map[string][]mappingSpan{}, actionIndex: map[string][]compactActionIndex{}}
+		mappingIndex: map[string][]mappingSpan{}, actionIndex: map[string][]compactActionIndex{}, compactPlans: map[occurrenceID]compactPlan{}}
 	intern := func(value string) (stringID, error) { return c.internString(value) }
 	span := func(count int) (stringSpan, error) {
 		if count < 0 || uint64(count) > uint64(maxCatalogItems) {
@@ -1318,6 +1394,10 @@ func (c *Catalog) compactEvidence() error {
 		s.mappingIndex[key] = append([]mappingSpan(nil), spans...)
 	}
 	s.mappingOrder = append(s.mappingOrder, c.mappingOrder...)
+	mappingIndexes := make(map[occurrenceID]int, len(s.mappings))
+	for i, m := range c.mappingStore {
+		mappingIndexes[m.occurrenceID] = i
+	}
 	for _, m := range c.mappingStore {
 		action, err := intern(m.Action)
 		if err != nil {
@@ -1450,6 +1530,38 @@ func (c *Catalog) compactEvidence() error {
 		s.actionIndex[key] = append(s.actionIndex[key], compactActionIndex{action: index, occurrence: d.occurrenceID})
 		actionCompactIndexes[key] = append(actionCompactIndexes[key], index)
 	}
+	actionIndexes := make(map[occurrenceID]int, len(s.actions))
+	for key, indexes := range actionCompactIndexes {
+		for i, index := range indexes {
+			if index >= 0 && index < len(s.actions) {
+				actionIndexes[c.buildActions[key][i].occurrenceID] = index
+			}
+		}
+	}
+	for occurrence, plan := range c.plans {
+		compact := compactPlan{occurrence: occurrence, diagnostics: append([]ValidationDiagnostic(nil), plan.Diagnostics...)}
+		var err error
+		compact.service, err = intern(plan.Service)
+		if err != nil {
+			return err
+		}
+		compact.operation, err = intern(plan.Operation)
+		if err != nil {
+			return err
+		}
+		for _, compiled := range plan.Mappings {
+			mappingIndex, ok := mappingIndexes[compiled.Mapping.occurrenceID]
+			if !ok {
+				return errors.New("catalog: static mapping occurrence is corrupt")
+			}
+			definitionIndex, ok := actionIndexes[compiled.Definition.occurrenceID]
+			if !ok {
+				return errors.New("catalog: static action occurrence is corrupt")
+			}
+			compact.mappings = append(compact.mappings, compactStaticMapping{mapping: mappingIndex, action: definitionIndex, dependent: compiled.Dependent})
+		}
+		s.compactPlans[occurrence] = compact
+	}
 	s.actionOrder = nil
 	for _, position := range c.buildActionOrder {
 		indexes := actionCompactIndexes[position.key]
@@ -1474,6 +1586,7 @@ func (c *Catalog) compactEvidence() error {
 	c.mappingStore = nil
 	c.mappingIndex = nil
 	c.mappingOrder = nil
+	c.plans = nil
 	c.serviceOperationIndexes = nil
 	c.strings = nil
 	c.stringIndex = nil

@@ -139,6 +139,12 @@ func TestWireToMappingGoldens(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := m.Map(context.Background(), decoded)
+			if tc.name == "ecs" {
+				if err == nil || got != nil || !strings.Contains(err.Error(), "static catalog validation failed") {
+					t.Fatalf("ECS multiset disagreement was not fail-closed: result=%+v err=%v", got, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
