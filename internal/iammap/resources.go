@@ -1,6 +1,7 @@
 package iammap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -9,7 +10,22 @@ import (
 	"unicode"
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
+	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 )
+
+func resourceForPrimaryContext(ctx context.Context, req *awsrequest.DecodedAWSRequest, primary iamliveadapter.PrimaryOccurrence, action string) ([]string, awsrequest.ScopeKind, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, awsrequest.ScopeUnresolved, err
+	}
+	return resourceFor(req, primary.ResourceType, action)
+}
+
+func resourceForPrimary(req *awsrequest.DecodedAWSRequest, primary iamliveadapter.PrimaryOccurrence, action string) ([]string, awsrequest.ScopeKind, error) {
+	return resourceForPrimaryContext(context.Background(), req, primary, action)
+}
 
 func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]string, awsrequest.ScopeKind, error) {
 	kind = strings.TrimSuffix(kind, "*")

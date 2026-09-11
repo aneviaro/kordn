@@ -87,7 +87,7 @@ func TestLookupRequestSelectsExactQueryAPIVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Entry.Operation != "Describe" || len(result.Primary) != 1 || result.Primary[0].Name != "Describe" {
+	if result.Operation != "Describe" || len(result.PrimaryOccurrences) != 1 || result.PrimaryOccurrences[0].Action.Name != "Describe" {
 		t.Fatalf("exact query API version did not select one occurrence: %+v", result)
 	}
 }
@@ -109,23 +109,23 @@ func TestLookupRequestResultsAndParametersAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Dependencies) != 1 || len(first.Dependencies[0].Resources) != 1 || first.Dependencies[0].Resources[0] != "arn:one" {
-		t.Fatalf("unexpected first dependency: %+v", first.Dependencies)
+	if len(first.DependencyOccurrences) != 1 || len(first.DependencyOccurrences[0].Resources) != 1 || first.DependencyOccurrences[0].Resources[0] != "arn:one" || first.DependencyOccurrences[0].Applicability != ApplicabilityApplicable {
+		t.Fatalf("unexpected first dependency: %+v", first.DependencyOccurrences)
 	}
-	first.Dependencies[0].Resources[0] = "mutated"
-	first.Primary[0].Name = "mutated"
+	first.DependencyOccurrences[0].Resources[0] = "mutated"
+	first.PrimaryOccurrences[0].Action.Name = "mutated"
 	second, err := a.LookupRequest("test", "Describe", identity, map[string]awsrequest.Value{"RoleArn": {Kind: awsrequest.ValueString, String: "arn:two"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Primary[0].Name != "Describe" || second.Dependencies[0].Resources[0] != "arn:two" {
+	if second.PrimaryOccurrences[0].Action.Name != "Describe" || second.DependencyOccurrences[0].Resources[0] != "arn:two" {
 		t.Fatalf("lookup results or parameter evaluation leaked across calls: %+v", second)
 	}
 	third, err := a.LookupRequest("test", "Describe", identity, map[string]awsrequest.Value{"RoleArn": {Kind: awsrequest.ValueString, String: "arn:one"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if third.Dependencies[0].Resources[0] != "arn:one" {
+	if third.DependencyOccurrences[0].Resources[0] != "arn:one" {
 		t.Fatalf("later lookup retained mutated result state: %+v", third)
 	}
 }
@@ -139,7 +139,7 @@ func TestLookupUsesPinnedActionsAndInvokesDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Primary) != 1 || result.Primary[0].Name != "DescribeInstances" || !result.DependenciesCertain {
+	if len(result.PrimaryOccurrences) != 1 || result.PrimaryOccurrences[0].Action.Name != "DescribeInstances" || len(result.DependencyOccurrences) != 0 {
 		t.Fatalf("unexpected lookup result: %+v", result)
 	}
 }
@@ -204,7 +204,7 @@ func TestLookupRequestSelectsExactJSONAPIVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Primary) != 1 || result.Primary[0].Name != "GetItem" {
+	if len(result.PrimaryOccurrences) != 1 || result.PrimaryOccurrences[0].Action.Name != "GetItem" {
 		t.Fatalf("unexpected GetItem lookup result: %+v", result)
 	}
 }
@@ -276,12 +276,12 @@ func TestConditionFalseDependentActionMappingRetainsOccurrences(t *testing.T) {
 			if duplicate {
 				want = 2
 			}
-			if len(result.Dependencies) != want {
-				t.Fatalf("condition-false dependency occurrences were dropped: got %d, want %d", len(result.Dependencies), want)
+			if len(result.DependencyOccurrences) != want {
+				t.Fatalf("condition-false dependency occurrences were dropped: got %d, want %d", len(result.DependencyOccurrences), want)
 			}
-			for _, candidate := range result.Dependencies {
-				if candidate.Action.Service != "iam" || candidate.Action.Name != "PassRole" || !candidate.ProvenInapplicable {
-					t.Fatalf("unexpected condition-false dependency candidate: %+v", candidate)
+			for _, candidate := range result.DependencyOccurrences {
+				if candidate.Action.Service != "iam" || candidate.Action.Name != "PassRole" || candidate.Applicability != ApplicabilityInapplicable {
+					t.Fatalf("unexpected condition-false dependency occurrence: %+v", candidate)
 				}
 			}
 		})
@@ -303,7 +303,7 @@ func TestDependentActionsModelsPassRoleFromTypedParameters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Dependencies) != 0 || !result.DependenciesCertain {
+	if len(result.DependencyOccurrences) != 0 {
 		t.Fatalf("nondependent operation was not proven empty: %+v", result)
 	}
 }

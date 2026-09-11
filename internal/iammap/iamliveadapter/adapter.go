@@ -3,7 +3,6 @@ package iamliveadapter
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"unicode"
 
@@ -20,23 +19,6 @@ const UpstreamCommit = iamlivecatalog.UpstreamCommit
 const AdapterVersion = "iamlive-derived/v2@" + UpstreamCommit
 
 type Action struct{ Service, Name string }
-type DependencyCandidate struct {
-	Action             Action
-	Resources          []string
-	ParameterNames     []string
-	ProvenInapplicable bool
-}
-type DependencyResult struct {
-	Candidates []DependencyCandidate
-	Certain    bool
-}
-type LookupResult struct {
-	Entry               data.Entry
-	Primary             []Action
-	PrimaryEntries      []data.Entry
-	Dependencies        []DependencyCandidate
-	DependenciesCertain bool
-}
 
 // catalogDependency is the immutable, narrow catalog view needed by this
 // consumer. Static plans are compiled before publication and copied at the
@@ -46,16 +28,6 @@ type catalogDependency interface {
 }
 
 type Adapter struct{ catalog catalogDependency }
-
-// WireIdentity is the portion of an authenticated request which selects an
-// API model record. It intentionally contains no body or credential data.
-type WireIdentity struct {
-	Protocol awsrequest.AWSProtocol
-	Method   string
-	Path     string
-	Query    url.Values
-	Target   string
-}
 
 func New() (*Adapter, error) {
 	c, err := iamlivecatalog.Load()
@@ -81,6 +53,19 @@ func NormalizeOperation(operation string) string {
 // LookupRequest selects one complete, known wire record. In particular, an
 // operation record marked contradictory is never made usable by a wire match.
 func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity, parameters map[string]awsrequest.Value) (LookupResult, error) {
+	return a.LookupRequestContext(context.Background(), service, operation, identity, parameters)
+}
+
+// LookupRequestContext performs bounded wire selection and request-dependent
+// evaluation under the caller's context. Static plan evidence is never
+// rebuilt or mutated here.
+func (a *Adapter) LookupRequestContext(ctx context.Context, service, operation string, identity WireIdentity, parameters map[string]awsrequest.Value) (LookupResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return LookupResult{}, err
+	}
 	if a == nil || a.catalog == nil {
 		return LookupResult{}, fmt.Errorf("adapter unavailable")
 	}
@@ -91,6 +76,9 @@ func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity
 	occurrences := a.catalog.OperationOccurrences(service, op)
 	selected := make([]iamlivecatalog.OperationOccurrence, 0, len(occurrences))
 	for _, occurrence := range occurrences {
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		record := occurrence.Operation
 		if record.State != iamlivecatalog.EvidenceKnown {
 			continue
@@ -112,7 +100,7 @@ func (a *Adapter) LookupRequest(service, operation string, identity WireIdentity
 		}
 		return LookupResult{}, fmt.Errorf("ambiguous operation")
 	}
-	return a.lookupOperation(service, selected[0].Operation, selected[0].Plan, parameters)
+	return a.lookupOperationContext(ctx, service, selected[0].Operation, selected[0].Plan, parameters)
 }
 
 func recordProtocol(protocol, version string) (awsrequest.AWSProtocol, bool) {
@@ -208,6 +196,8 @@ func (a *Adapter) Lookup(service, operation string, parameters ...map[string]aws
 }
 
 type mappingRecord struct {
+	id           uint32
+	definitionID uint32
 	action       Action
 	definition   iamlivecatalog.ActionDefinition
 	mapping      iamlivecatalog.ActionMapping
@@ -218,6 +208,16 @@ type mappingRecord struct {
 func runtimePlanUsable(plan iamlivecatalog.StaticPlan) bool { return plan.Valid() }
 
 func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Operation, plan iamlivecatalog.StaticPlan, parameters map[string]awsrequest.Value) (LookupResult, error) {
+	return a.lookupOperationContext(context.Background(), service, operation, plan, parameters)
+}
+
+func (a *Adapter) lookupOperationContext(ctx context.Context, service string, operation iamlivecatalog.Operation, plan iamlivecatalog.StaticPlan, parameters map[string]awsrequest.Value) (LookupResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return LookupResult{}, err
+	}
 	if !runtimePlanUsable(plan) {
 		if len(plan.Diagnostics) == 0 {
 			return LookupResult{}, fmt.Errorf("static catalog plan unavailable")
@@ -230,7 +230,9 @@ func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Opera
 	}
 	records := make([]mappingRecord, 0, len(plan.Mappings))
 	var roots []mappingRecord
-	for _, compiled := range plan.Mappings {
+	definitionIDs := map[string]uint32{}
+	var nextDefinitionID uint32 = 1
+	for index, compiled := range plan.Mappings {
 		raw := compiled.Mapping
 		if compiled.Action.Service == "" || compiled.Action.Name == "" {
 			return LookupResult{}, fmt.Errorf("static catalog plan contains malformed action")
@@ -243,7 +245,18 @@ func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Opera
 		if state == conditionUnknown {
 			return LookupResult{}, fmt.Errorf("mapping condition evidence unavailable: %s", raw.Action)
 		}
-		record := mappingRecord{action: action, definition: compiled.Definition, mapping: raw, inapplicable: state == conditionFalse, dependent: compiled.Dependent}
+		id := compiled.Occurrence()
+		if id == 0 {
+			id = uint32(index + 1)
+		}
+		definitionKey := strings.ToLower(action.Service) + "\x00" + strings.ToLower(action.Name)
+		definitionID := definitionIDs[definitionKey]
+		if definitionID == 0 {
+			definitionID = nextDefinitionID
+			nextDefinitionID++
+			definitionIDs[definitionKey] = definitionID
+		}
+		record := mappingRecord{id: id, definitionID: definitionID, action: action, definition: compiled.Definition, mapping: raw, inapplicable: state == conditionFalse, dependent: compiled.Dependent}
 		records = append(records, record)
 		if !compiled.Dependent && !record.inapplicable {
 			roots = append(roots, record)
@@ -253,53 +266,88 @@ func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Opera
 		return LookupResult{}, fmt.Errorf("mapping has no primary action")
 	}
 
-	var primary []Action
-	var entries []data.Entry
-	var dependencies []DependencyCandidate
-	var allDefinitionDeps []string
-	certain := true
+	var primaryOccurrences []PrimaryOccurrence
+	var dependencyOccurrences []DependencyOccurrence
+	// Static validation guarantees that every dependent mapping occurrence has
+	// one corresponding definition edge. Keep a local occurrence address for
+	// that edge rather than collapsing duplicate edges by action name.
+	edgeIDs := map[string][]uint32{}
+	var nextEdgeID uint32 = 1
 	for _, root := range roots {
-		primary = append(primary, root.action)
+		for _, resource := range root.definition.Resources {
+			for _, dependency := range resource.DependentActions {
+				key := strings.ToLower(dependency)
+				edgeIDs[key] = append(edgeIDs[key], nextEdgeID)
+				nextEdgeID++
+			}
+		}
+	}
+	edgeIndexes := map[string]int{}
+	operationID := plan.Occurrence
+	if operationID == 0 {
+		operationID = 1
+	}
+	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		entry := entryForAction(root.action, root.definition, operation.Name, root.mapping)
 		entry.Service = strings.ToLower(service)
 		entry.Operation = operation.Name
-		entries = append(entries, entry)
-		allDefinitionDeps = append(allDefinitionDeps, entry.Dependencies...)
+		primaryOccurrences = append(primaryOccurrences, PrimaryOccurrence{
+			ID: root.id, OperationID: operationID, DefinitionID: root.definitionID, Operation: operation.Name, Action: root.action,
+			Mapping: root.mapping.Clone(), Definition: root.definition.Clone(),
+			ResourceType:           entry.Resource,
+			ResourceTypeOccurrence: resourceTypeOccurrence(root.definition, entry.Resource), Scope: entry.Scope,
+			DefinitionDependencies: append([]string(nil), entry.Dependencies...),
+		})
 	}
 	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		if !record.dependent {
 			continue
 		}
+		parameterNames := dependencyParameterNames(record.mapping)
+		dependencyKey := strings.ToLower(record.action.Service) + ":" + strings.ToLower(record.action.Name)
+		edgeIndex := edgeIndexes[dependencyKey]
+		var edgeID uint32
+		if edgeIndex < len(edgeIDs[dependencyKey]) {
+			edgeID = edgeIDs[dependencyKey][edgeIndex]
+			edgeIndexes[dependencyKey] = edgeIndex + 1
+		}
+		if edgeID == 0 {
+			// A direct test seam may provide a deliberately duplicated mapping
+			// occurrence without rebuilding the compiled edge multiset. Keep its
+			// identity distinct; production plans are checked by dependencies.
+			edgeID = nextEdgeID
+			nextEdgeID++
+		}
+		occurrence := DependencyOccurrence{ID: record.id, OperationID: operationID, DefinitionID: record.definitionID, DefinitionEdgeID: edgeID, MappingID: record.id, Action: record.action, ParameterNames: append([]string(nil), parameterNames...)}
 		if record.inapplicable {
-			// Keep this occurrence: the mapper must account for an absent optional
-			// dependency rather than silently dropping a raw catalog edge.
-			dependencies = append(dependencies, DependencyCandidate{Action: record.action, ParameterNames: dependencyParameterNames(record.mapping), ProvenInapplicable: true})
+			// Preserve proven-inapplicable occurrences as evidence.
+			occurrence.Applicability = ApplicabilityInapplicable
+			dependencyOccurrences = append(dependencyOccurrences, occurrence)
 			continue
 		}
 		values, state := dependencyValues(record.mapping, parameters)
 		switch state {
 		case dependencyFalse:
-			dependencies = append(dependencies, DependencyCandidate{Action: record.action, ParameterNames: dependencyParameterNames(record.mapping), ProvenInapplicable: true})
+			occurrence.Applicability = ApplicabilityInapplicable
 		case dependencyUnknown:
-			certain = false
-			dependencies = append(dependencies, DependencyCandidate{Action: record.action, ParameterNames: dependencyParameterNames(record.mapping)})
+			occurrence.Applicability = ApplicabilityUnknown
 		case dependencyTrue:
 			if len(values) == 0 {
-				certain = false
-				dependencies = append(dependencies, DependencyCandidate{Action: record.action, ParameterNames: dependencyParameterNames(record.mapping)})
-				continue
+				occurrence.Applicability = ApplicabilityUnknown
+				break
 			}
-			for _, value := range values {
-				dependencies = append(dependencies, DependencyCandidate{Action: record.action, Resources: []string{value}, ParameterNames: dependencyParameterNames(record.mapping)})
-			}
+			occurrence.Resources = append([]string(nil), values...)
+			occurrence.Applicability = ApplicabilityApplicable
 		}
+		dependencyOccurrences = append(dependencyOccurrences, occurrence)
 	}
-	entry := data.Entry{Service: strings.ToLower(service), Operation: operation.Name, Dependencies: append([]string(nil), allDefinitionDeps...)}
-	if len(entries) > 0 {
-		entry = entries[0]
-		entry.Dependencies = append([]string(nil), allDefinitionDeps...)
-	}
-	return LookupResult{Entry: entry, Primary: primary, PrimaryEntries: entries, Dependencies: dependencies, DependenciesCertain: certain}, nil
+	return LookupResult{Operation: operation.Name, PrimaryOccurrences: primaryOccurrences, DependencyOccurrences: dependencyOccurrences}, nil
 }
 
 type conditionState uint8
@@ -428,34 +476,45 @@ func entryForAction(action Action, definition iamlivecatalog.ActionDefinition, o
 		for _, resource := range mapping.Resources {
 			params[strings.ToLower(resource.Parameter)] = true
 		}
+		matches := []string{}
 		for _, name := range named {
 			n := strings.ToLower(strings.TrimSuffix(name, "*"))
-			if n == "object" && (params["key"] || params["objectname"]) {
-				entry.Resource = name
-				entry.Scope = "exact"
-				break
-			}
-			if n == "table" && params["tablename"] {
-				entry.Resource = name
-				entry.Scope = "exact"
-				break
-			}
-			if n == "task-definition" && (params["taskdefinition"] || params["taskdefinitionfamilyname"]) {
-				entry.Resource = name
-				entry.Scope = "exact"
-				break
-			}
-			if n == "log-stream" && (params["logstreamname"] || params["loggroupname"]) {
-				entry.Resource = name
-				entry.Scope = "exact"
-				break
+			matched := (n == "object" && (params["key"] || params["objectname"])) ||
+				(n == "table" && params["tablename"]) ||
+				(n == "task-definition" && (params["taskdefinition"] || params["taskdefinitionfamilyname"])) ||
+				(n == "log-stream" && (params["logstreamname"] || params["loggroupname"]))
+			if matched {
+				matches = append(matches, name)
 			}
 		}
-		if entry.Resource == "global" {
+		if len(matches) == 1 {
+			entry.Resource = matches[0]
+			entry.Scope = "exact"
+		} else {
+			// Multiple matching resource types are ambiguous; absence and
+			// ambiguity are both represented as unresolved, never as global.
 			entry.Scope = "unresolved"
 		}
+	} else if len(definition.Resources) > 1 {
+		// Multiple unnamed resource occurrences cannot safely be represented as
+		// one known-global resource. Keep the scope unresolved instead.
+		entry.Scope = "unresolved"
 	}
 	return entry
+}
+
+func resourceTypeOccurrence(definition iamlivecatalog.ActionDefinition, resource string) uint32 {
+	want := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(resource)), "*")
+	for index, candidate := range definition.Resources {
+		name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(candidate.Name)), "*")
+		if want != "" && name == want {
+			return uint32(index + 1)
+		}
+	}
+	if len(definition.Resources) == 1 {
+		return 1
+	}
+	return 0
 }
 
 func dependencyParameterNames(mapping iamlivecatalog.ActionMapping) []string {
@@ -598,7 +657,14 @@ func (a *Adapter) LookupOperation(service, operation string) (string, data.Entry
 	if err != nil {
 		return "", data.Entry{}, err
 	}
-	return result.Entry.Operation, result.Entry, nil
+	if len(result.PrimaryOccurrences) == 0 {
+		return "", data.Entry{}, fmt.Errorf("operation has no primary occurrence")
+	}
+	primary := result.PrimaryOccurrences[0]
+	entry := entryForAction(primary.Action, primary.Definition, result.Operation, primary.Mapping)
+	entry.Resource, entry.Scope = primary.ResourceType, primary.Scope
+	entry.Service = strings.ToLower(service)
+	return result.Operation, entry, nil
 }
 func (a *Adapter) Version() string {
 	if a == nil || a.catalog == nil {
