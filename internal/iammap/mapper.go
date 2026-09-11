@@ -4,7 +4,6 @@ package iammap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/kordn-ai/kordn/internal/awsrequest"
 	"github.com/kordn-ai/kordn/internal/iammap/data"
 	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
@@ -66,135 +65,154 @@ func (m *Mapper) IamLiveVersion() string {
 	return m.adapter.Version()
 }
 func (m *Mapper) AuthorizationDataVersion() string { return data.AuthorizationDataVersion() }
-func (m *Mapper) Map(ctx context.Context, req *awsrequest.DecodedAWSRequest) (*awsrequest.MappingResult, error) {
+func (m *Mapper) Map(ctx context.Context, req *awsrequest.DecodedAWSRequest) (result *awsrequest.MappingResult, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if m == nil || m.adapter == nil {
-		return nil, errors.New("mapper unavailable")
+		return nil, mappingFailure(MappingFailureLowConfidence, "mapper", errors.New("mapper unavailable"))
 	}
 	if req == nil {
-		return nil, errors.New("decoded request is required")
+		return nil, mappingFailure(MappingFailureLowConfidence, "input", errors.New("decoded request is required"))
 	}
 	if e := req.Validate(); e != nil {
-		return nil, fmt.Errorf("mapping input: %w", e)
+		return nil, mappingFailure(MappingFailureLowConfidence, "input", e)
 	}
 	if e := ctx.Err(); e != nil {
-		return nil, errors.New("mapper timeout; request rejected")
+		return nil, mappingContextFailure(e)
 	}
 	wctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
-	ch := make(chan struct {
-		r *awsrequest.MappingResult
-		e error
-	}, 1)
-	go func() {
-		x := struct {
-			r *awsrequest.MappingResult
-			e error
-		}{}
-		defer func() {
-			if recover() != nil {
-				x.e = errors.New("mapper panic; request rejected")
-			}
-			ch <- x
-		}()
-		x.r, x.e = m.mapOne(wctx, req)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = nil
+			err = mappingFailure(MappingFailurePanic, "mapper", ErrMapperPanic)
+		}
 	}()
-	select {
-	case <-wctx.Done():
-		return nil, errors.New("mapper timeout; request rejected")
-	case x := <-ch:
-		if x.e != nil {
-			return nil, x.e
+	result, err = m.mapOne(wctx, req)
+	if err != nil {
+		if contextErr := mappingContextFailure(err); contextErr != nil {
+			return nil, contextErr
 		}
-		if x.r == nil {
-			return nil, errors.New("mapper returned no result")
-		}
-		return x.r, nil
+		return nil, err
 	}
+	if contextErr := mappingContextFailure(wctx.Err()); contextErr != nil {
+		return nil, contextErr
+	}
+	if result == nil {
+		return nil, mappingFailure(MappingFailureInvalidResult, "result", errors.New("nil mapping"))
+	}
+	return result, nil
 }
 func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) (*awsrequest.MappingResult, error) {
 	if e := ctx.Err(); e != nil {
-		return nil, errors.New("mapper timeout; request rejected")
+		return nil, e
 	}
 	ep, e := m.classifier.Classify(req.EndpointHost)
 	if e != nil || ep.Partition != req.Partition || ep.Service != req.Service || ep.Region != req.Region || ep.IsGlobal() != (req.Region == "") {
-		return nil, errors.New("decoded endpoint identity disagrees")
+		return nil, mappingFailure(MappingFailureCatalogInconsistency, "endpoint", e)
 	}
 	protocol, ok := awsrequest.AuthoritativeProtocol(req.Service)
 	if !ok || protocol != req.Protocol {
-		return nil, errors.New("decoded protocol disagrees with endpoint service")
+		return nil, mappingFailure(MappingFailureCatalogInconsistency, "protocol", nil)
 	}
 	op := iamliveadapter.NormalizeOperation(req.Operation)
 	if op == "" {
-		return nil, errors.New("operation evidence is unknown")
+		return nil, mappingFailure(MappingFailureUnknownWireOperation, "wire", nil)
 	}
 	identity := iamliveadapter.WireIdentity{Protocol: req.Protocol, Method: req.Method, Path: req.CanonicalPath, Query: req.CanonicalQuery}
 	if req.Protocol == awsrequest.ProtocolJSON10 || req.Protocol == awsrequest.ProtocolJSON11 {
 		if req.Headers == nil {
-			return nil, errors.New("exactly one X-Amz-Target is required")
+			return nil, mappingFailure(MappingFailureUnknownWireOperation, "wire", nil)
 		}
 		targets := req.Headers.Values("X-Amz-Target")
 		if len(targets) != 1 {
-			return nil, errors.New("exactly one X-Amz-Target is required")
+			return nil, mappingFailure(MappingFailureUnknownWireOperation, "wire", nil)
 		}
 		identity.Target = targets[0]
 	}
 	wire, ok := m.adapter.(wireLookupAdapter)
 	if !ok {
-		return nil, errors.New("context-aware request adapter is required")
+		return nil, mappingFailure(MappingFailureCatalogInconsistency, "adapter", nil)
 	}
 	lookup, lookupErr := wire.LookupRequestContext(ctx, req.Service, op, identity, req.Parameters)
 	if lookupErr != nil {
-		return nil, fmt.Errorf("unknown operation %s:%s: %w", req.Service, op, lookupErr)
+		if contextErr := mappingContextFailure(lookupErr); contextErr != nil {
+			return nil, lookupErr
+		}
+		var failure *iamliveadapter.Failure
+		if errors.As(lookupErr, &failure) {
+			detail := failure.SafeDetail()
+			switch failure.Kind {
+			case iamliveadapter.FailureUnknownWireOperation, iamliveadapter.FailureIncompleteWireIdentity:
+				return nil, mappingFailure(MappingFailureUnknownWireOperation, "wire", lookupErr)
+			case iamliveadapter.FailureAmbiguousWireOperation:
+				return nil, mappingFailure(MappingFailureAmbiguousWireOperation, "wire", lookupErr)
+			case iamliveadapter.FailureUnresolvedApplicability:
+				return nil, mappingFailure(MappingFailureUnresolvedPrimaryResource, "resource", lookupErr)
+			case iamliveadapter.FailureUnresolvedDependency:
+				return nil, mappingFailureWithDetail(MappingFailureUnresolvedDependency, "dependency", lookupErr, detail)
+			default:
+				return nil, mappingFailure(MappingFailureCatalogInconsistency, "catalog", lookupErr)
+			}
+		}
+		return nil, mappingFailure(MappingFailureCatalogInconsistency, "catalog", lookupErr)
 	}
 	canonical := lookup.Operation
 	primaries := lookup.PrimaryOccurrences
 	if canonical == "" || len(primaries) == 0 {
-		return nil, errors.New("iamlive primary occurrence set disagrees")
+		return nil, mappingFailure(MappingFailureCatalogInconsistency, "catalog", nil)
 	}
 	reqs := make([]awsrequest.IAMRequirement, 0, len(primaries))
 	var expectedDependencies []string
 	for _, primary := range primaries {
+		if e := ctx.Err(); e != nil {
+			return nil, e
+		}
 		rawAction := primary.Action.Service + ":" + primary.Action.Name
 		action := canonicalAction(rawAction)
 		if action == "" || primary.Operation != canonical {
-			return nil, errors.New("iamlive and authorization action disagree")
+			return nil, mappingFailure(MappingFailureCatalogInconsistency, "catalog", nil)
 		}
 		res, scope, e := resourceForPrimaryContext(ctx, req, primary, action)
 		if e != nil {
-			return nil, e
+			if contextErr := mappingContextFailure(e); contextErr != nil {
+				return nil, e
+			}
+			return nil, mappingFailure(MappingFailureUnresolvedPrimaryResource, "resource", e)
 		}
-		if scope == awsrequest.ScopeUnresolved {
-			return nil, errors.New("unresolved primary resource; mapping rejected")
-		}
-		if len(res) == 0 {
-			return nil, errors.New("primary resource is empty; mapping rejected")
+		if scope == awsrequest.ScopeUnresolved || len(res) == 0 {
+			return nil, mappingFailure(MappingFailureUnresolvedPrimaryResource, "resource", nil)
 		}
 		if primary.Scope != "" && string(scope) != primary.Scope && !(primary.Scope == "exact" && scope == awsrequest.ScopeSet) {
-			return nil, errors.New("primary scope evidence disagrees")
+			return nil, mappingFailure(MappingFailureCatalogInconsistency, "catalog", nil)
 		}
 		reqs = append(reqs, awsrequest.IAMRequirement{Action: action, Resources: res, ScopeKind: scope})
 		expectedDependencies = append(expectedDependencies, primary.DefinitionDependencies...)
 	}
 	if e := ctx.Err(); e != nil {
-		return nil, errors.New("mapper timeout; request rejected")
+		return nil, e
 	}
 	deps, e := dependencies(ctx, req, expectedDependencies, lookup.DependencyOccurrences)
 	if e != nil {
+		if contextErr := mappingContextFailure(e); contextErr != nil {
+			return nil, e
+		}
 		return nil, e
 	}
 	for _, d := range deps {
+		if e := ctx.Err(); e != nil {
+			return nil, e
+		}
 		if d.ScopeKind == awsrequest.ScopeUnresolved {
-			return nil, errors.New("unresolved dependent resource; mapping rejected")
+			return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 		}
 		reqs = append(reqs, d)
 	}
 	sortRequirements(reqs)
 	r := &awsrequest.MappingResult{Service: req.Service, Operation: canonical, Requirements: reqs, MapperVersion: MapperVersion, IamLiveVersion: m.adapter.Version(), AuthorizationDataVersion: data.AuthorizationDataVersion(), Confidence: awsrequest.ConfidenceHigh, Evidence: []awsrequest.MappingEvidence{{Source: "endpoint", Field: "service", Value: req.Service}, {Source: "endpoint", Field: "partition", Value: req.Partition}, {Source: "endpoint", Field: "region", Value: req.Region}, {Source: "protocol", Field: "protocol", Value: string(req.Protocol)}, {Source: "decoder", Field: "operation", Value: canonical}}}
 	if e = r.Validate(); e != nil {
-		return nil, e
+		return nil, mappingFailure(MappingFailureInvalidResult, "result", e)
 	}
 	return r, nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -173,6 +174,46 @@ func TestNoScopeWidening(t *testing.T) {
 		t.Fatalf("ECS multiset disagreement was not fail-closed: %v %+v", e, x)
 	}
 }
+func TestMapperCancellationStopsCooperativeWork(t *testing.T) {
+	active := &atomic.Int32{}
+	entered := make(chan struct{}, 1)
+	m, err := newMapperForTest(MapperOptions{Timeout: time.Second}, cooperativeBlockingAdapter{active: active, entered: entered})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := goldenRequest("ec2", "ec2.us-east-1.amazonaws.com", "us-east-1", "DescribeInstances", nil)
+	done := make(chan error, 1)
+	go func() { _, mapErr := m.Map(ctx, r); done <- mapErr }()
+	select {
+	case <-entered:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("mapping did not enter cooperative stage")
+	}
+	select {
+	case mapErr := <-done:
+		if !errors.Is(mapErr, ErrMappingCancelled) || active.Load() != 0 {
+			t.Fatalf("cancel result=%v active=%d", mapErr, active.Load())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled mapping did not return")
+	}
+}
+
+func TestMapperTimeoutStopsCooperativeWork(t *testing.T) {
+	active := &atomic.Int32{}
+	entered := make(chan struct{}, 1)
+	m, err := newMapperForTest(MapperOptions{Timeout: 5 * time.Millisecond}, cooperativeBlockingAdapter{active: active, entered: entered})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := goldenRequest("ec2", "ec2.us-east-1.amazonaws.com", "us-east-1", "DescribeInstances", nil)
+	if _, mapErr := m.Map(context.Background(), r); !errors.Is(mapErr, ErrMappingTimeout) || active.Load() != 0 {
+		t.Fatalf("timeout result=%v active=%d", mapErr, active.Load())
+	}
+}
+
 func TestMapperPanicAndTimeoutFailClosed(t *testing.T) {
 	panicMapper, e := newMapperForTest(MapperOptions{Timeout: 100 * time.Millisecond}, panicAdapter{})
 	if e != nil {
@@ -238,15 +279,36 @@ func (panicAdapter) LookupRequestContext(context.Context, string, string, iamliv
 }
 func (panicAdapter) Version() string { return iamliveadapter.AdapterVersion }
 
+type cooperativeBlockingAdapter struct {
+	active  *atomic.Int32
+	entered chan<- struct{}
+}
+
+func (a cooperativeBlockingAdapter) LookupRequestContext(ctx context.Context, _ string, _ string, _ iamliveadapter.WireIdentity, _ map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	a.active.Add(1)
+	defer a.active.Add(-1)
+	select {
+	case a.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return iamliveadapter.LookupResult{}, ctx.Err()
+}
+func (cooperativeBlockingAdapter) Version() string { return iamliveadapter.AdapterVersion }
+
 type blockingAdapter struct{ release <-chan struct{} }
 
 func (a blockingAdapter) Lookup(string, string, ...map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
 	<-a.release
 	return iamliveadapter.LookupResult{}, errors.New("test adapter released")
 }
-func (a blockingAdapter) LookupRequestContext(context.Context, string, string, iamliveadapter.WireIdentity, map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
-	<-a.release
-	return iamliveadapter.LookupResult{}, errors.New("test adapter released")
+func (a blockingAdapter) LookupRequestContext(ctx context.Context, _ string, _ string, _ iamliveadapter.WireIdentity, _ map[string]awsrequest.Value) (iamliveadapter.LookupResult, error) {
+	select {
+	case <-a.release:
+		return iamliveadapter.LookupResult{}, errors.New("test adapter released")
+	case <-ctx.Done():
+		return iamliveadapter.LookupResult{}, ctx.Err()
+	}
 }
 func (blockingAdapter) Version() string { return iamliveadapter.AdapterVersion }
 

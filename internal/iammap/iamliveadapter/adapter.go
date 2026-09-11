@@ -18,6 +18,87 @@ const UpstreamCommit = iamlivecatalog.UpstreamCommit
 // upstream evidence pin.
 const AdapterVersion = "iamlive-derived/v2@" + UpstreamCommit
 
+// FailureKind identifies bounded adapter evidence failures.
+type FailureKind uint8
+
+const (
+	FailureUnknownWireOperation FailureKind = iota + 1
+	FailureAmbiguousWireOperation
+	FailureIncompleteWireIdentity
+	FailureCatalogInconsistency
+	FailureUnresolvedApplicability
+	FailureUnresolvedDependency
+)
+
+// Failure is a typed, bounded adapter failure. It deliberately omits service,
+// operation, parameters, and catalog diagnostic text from its wire-facing
+// message while retaining a cause for semantic matching by the mapper.
+type Failure struct {
+	Kind   FailureKind
+	cause  error
+	static bool
+	detail string
+}
+
+func (f *Failure) Error() string {
+	if f == nil {
+		return "adapter failure"
+	}
+	if f.static {
+		if f.detail != "" {
+			return "static catalog validation failed: " + safeFailureDetail(f.detail)
+		}
+		return "static catalog validation failed"
+	}
+	switch f.Kind {
+	case FailureUnknownWireOperation:
+		return "unknown operation"
+	case FailureAmbiguousWireOperation:
+		return "ambiguous operation"
+	case FailureIncompleteWireIdentity:
+		return "incomplete wire identity"
+	case FailureCatalogInconsistency:
+		return "catalog inconsistency"
+	case FailureUnresolvedApplicability:
+		return "unresolved applicability"
+	case FailureUnresolvedDependency:
+		return "unresolved dependency"
+	default:
+		return "adapter failure"
+	}
+}
+
+// SafeDetail returns a bounded static-catalog label for policy diagnostics.
+// It never returns request-derived evidence.
+func (f *Failure) SafeDetail() string {
+	if f == nil || !f.static {
+		return ""
+	}
+	return safeFailureDetail(f.detail)
+}
+
+func safeFailureDetail(value string) string {
+	if len(value) > 96 {
+		value = value[:96]
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != ':' && r != '-' && r != '_' && r != ' ' {
+			return "catalog evidence"
+		}
+	}
+	return value
+}
+func (f *Failure) Unwrap() error {
+	if f == nil {
+		return nil
+	}
+	return f.cause
+}
+func adapterFailure(kind FailureKind, cause error) error { return &Failure{Kind: kind, cause: cause} }
+func adapterStaticFailure(kind FailureKind, detail string) error {
+	return &Failure{Kind: kind, static: true, detail: detail}
+}
+
 type Action struct{ Service, Name string }
 
 // catalogDependency is the immutable, narrow catalog view needed by this
@@ -67,11 +148,11 @@ func (a *Adapter) LookupRequestContext(ctx context.Context, service, operation s
 		return LookupResult{}, err
 	}
 	if a == nil || a.catalog == nil {
-		return LookupResult{}, fmt.Errorf("adapter unavailable")
+		return LookupResult{}, adapterFailure(FailureCatalogInconsistency, nil)
 	}
 	op := NormalizeOperation(operation)
 	if op == "" || !identity.Protocol.Supported() || strings.TrimSpace(identity.Method) == "" || identity.Path == "" {
-		return LookupResult{}, fmt.Errorf("incomplete wire identity")
+		return LookupResult{}, adapterFailure(FailureIncompleteWireIdentity, nil)
 	}
 	occurrences := a.catalog.OperationOccurrences(service, op)
 	selected := make([]iamlivecatalog.OperationOccurrence, 0, len(occurrences))
@@ -96,9 +177,9 @@ func (a *Adapter) LookupRequestContext(ctx context.Context, service, operation s
 	}
 	if len(selected) != 1 {
 		if len(selected) == 0 {
-			return LookupResult{}, fmt.Errorf("unknown operation")
+			return LookupResult{}, adapterFailure(FailureUnknownWireOperation, nil)
 		}
-		return LookupResult{}, fmt.Errorf("ambiguous operation")
+		return LookupResult{}, adapterFailure(FailureAmbiguousWireOperation, nil)
 	}
 	return a.lookupOperationContext(ctx, service, selected[0].Operation, selected[0].Plan, parameters)
 }
@@ -172,21 +253,21 @@ func jsonVersion(p awsrequest.AWSProtocol) string {
 // does not use this name-only compatibility method.
 func (a *Adapter) Lookup(service, operation string, parameters ...map[string]awsrequest.Value) (LookupResult, error) {
 	if a == nil || a.catalog == nil {
-		return LookupResult{}, fmt.Errorf("adapter unavailable")
+		return LookupResult{}, adapterFailure(FailureCatalogInconsistency, nil)
 	}
 	if len(parameters) > 1 {
-		return LookupResult{}, fmt.Errorf("too many parameter maps")
+		return LookupResult{}, adapterFailure(FailureIncompleteWireIdentity, nil)
 	}
 	op := NormalizeOperation(operation)
 	if op == "" {
-		return LookupResult{}, fmt.Errorf("unknown operation")
+		return LookupResult{}, adapterFailure(FailureUnknownWireOperation, nil)
 	}
 	occurrences := a.catalog.OperationOccurrences(service, op)
 	if len(occurrences) == 0 {
-		return LookupResult{}, fmt.Errorf("unknown operation")
+		return LookupResult{}, adapterFailure(FailureUnknownWireOperation, nil)
 	}
 	if len(occurrences) > 1 {
-		return LookupResult{}, fmt.Errorf("ambiguous operation")
+		return LookupResult{}, adapterFailure(FailureAmbiguousWireOperation, nil)
 	}
 	var p map[string]awsrequest.Value
 	if len(parameters) == 1 {
@@ -207,6 +288,21 @@ type mappingRecord struct {
 
 func runtimePlanUsable(plan iamlivecatalog.StaticPlan) bool { return plan.Valid() }
 
+func runtimePlanFailure(plan iamlivecatalog.StaticPlan) (FailureKind, string) {
+	for _, diagnostic := range plan.Diagnostics {
+		// These are structured catalog validation facts, not request text. A
+		// dependency diagnostic must retain precedence over a generic plan
+		// failure so policy receives the stable dependent reason.
+		if diagnostic.Detail == "missing dependent action mapping occurrence" || diagnostic.RelatedAction != "" {
+			return FailureUnresolvedDependency, diagnostic.Action
+		}
+		if diagnostic.Detail == "mapping has no primary action" {
+			return FailureUnresolvedApplicability, ""
+		}
+	}
+	return FailureCatalogInconsistency, ""
+}
+
 func (a *Adapter) lookupOperation(service string, operation iamlivecatalog.Operation, plan iamlivecatalog.StaticPlan, parameters map[string]awsrequest.Value) (LookupResult, error) {
 	return a.lookupOperationContext(context.Background(), service, operation, plan, parameters)
 }
@@ -219,31 +315,31 @@ func (a *Adapter) lookupOperationContext(ctx context.Context, service string, op
 		return LookupResult{}, err
 	}
 	if !runtimePlanUsable(plan) {
-		if len(plan.Diagnostics) == 0 {
-			return LookupResult{}, fmt.Errorf("static catalog plan unavailable")
-		}
-		d := plan.Diagnostics[0]
-		return LookupResult{}, fmt.Errorf("static catalog validation failed: %s: %s: %s", d.Code, d.Action, d.Detail)
+		kind, detail := runtimePlanFailure(plan)
+		return LookupResult{}, adapterStaticFailure(kind, detail)
 	}
 	if operation.State != iamlivecatalog.EvidenceKnown || operation.MappingState != iamlivecatalog.EvidenceKnown || len(plan.Mappings) == 0 {
-		return LookupResult{}, fmt.Errorf("operation static evidence unavailable")
+		return LookupResult{}, adapterFailure(FailureCatalogInconsistency, nil)
 	}
 	records := make([]mappingRecord, 0, len(plan.Mappings))
 	var roots []mappingRecord
 	definitionIDs := map[string]uint32{}
 	var nextDefinitionID uint32 = 1
 	for index, compiled := range plan.Mappings {
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		raw := compiled.Mapping
 		if compiled.Action.Service == "" || compiled.Action.Name == "" {
-			return LookupResult{}, fmt.Errorf("static catalog plan contains malformed action")
+			return LookupResult{}, adapterFailure(FailureCatalogInconsistency, nil)
 		}
 		action := Action{Service: compiled.Action.Service, Name: compiled.Action.Name}
 		state := conditionTrue
 		if raw.Condition != nil {
-			state = evaluateCondition(raw.Condition, parameters)
+			state = evaluateCondition(ctx, raw.Condition, parameters)
 		}
 		if state == conditionUnknown {
-			return LookupResult{}, fmt.Errorf("mapping condition evidence unavailable: %s", raw.Action)
+			return LookupResult{}, adapterFailure(FailureUnresolvedApplicability, nil)
 		}
 		id := compiled.Occurrence()
 		if id == 0 {
@@ -263,7 +359,10 @@ func (a *Adapter) lookupOperationContext(ctx context.Context, service string, op
 		}
 	}
 	if len(roots) == 0 {
-		return LookupResult{}, fmt.Errorf("mapping has no primary action")
+		// All primary mappings were proven inapplicable for this request. This
+		// is request-dependent unresolved applicability, not a static catalog
+		// defect.
+		return LookupResult{}, adapterFailure(FailureUnresolvedApplicability, nil)
 	}
 
 	var primaryOccurrences []PrimaryOccurrence
@@ -274,7 +373,13 @@ func (a *Adapter) lookupOperationContext(ctx context.Context, service string, op
 	edgeIDs := map[string][]uint32{}
 	var nextEdgeID uint32 = 1
 	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		for _, resource := range root.definition.Resources {
+			if err := ctx.Err(); err != nil {
+				return LookupResult{}, err
+			}
 			for _, dependency := range resource.DependentActions {
 				key := strings.ToLower(dependency)
 				edgeIDs[key] = append(edgeIDs[key], nextEdgeID)
@@ -309,7 +414,10 @@ func (a *Adapter) lookupOperationContext(ctx context.Context, service string, op
 		if !record.dependent {
 			continue
 		}
-		parameterNames := dependencyParameterNames(record.mapping)
+		parameterNames := dependencyParameterNames(ctx, record.mapping)
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		dependencyKey := strings.ToLower(record.action.Service) + ":" + strings.ToLower(record.action.Name)
 		edgeIndex := edgeIndexes[dependencyKey]
 		var edgeID uint32
@@ -331,7 +439,10 @@ func (a *Adapter) lookupOperationContext(ctx context.Context, service string, op
 			dependencyOccurrences = append(dependencyOccurrences, occurrence)
 			continue
 		}
-		values, state := dependencyValues(record.mapping, parameters)
+		values, state := dependencyValues(ctx, record.mapping, parameters)
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
 		switch state {
 		case dependencyFalse:
 			occurrence.Applicability = ApplicabilityInapplicable
@@ -358,11 +469,14 @@ const (
 	conditionTrue
 )
 
-func evaluateCondition(condition *iamlivecatalog.Condition, parameters map[string]awsrequest.Value) conditionState {
+func evaluateCondition(ctx context.Context, condition *iamlivecatalog.Condition, parameters map[string]awsrequest.Value) conditionState {
 	if condition == nil {
 		return conditionTrue
 	}
-	values, present, valid := pathValues(parameters, condition.LHS)
+	if ctx != nil && ctx.Err() != nil {
+		return conditionUnknown
+	}
+	values, present, valid := pathValues(ctx, parameters, condition.LHS)
 	if !valid {
 		return conditionUnknown
 	}
@@ -373,22 +487,22 @@ func evaluateCondition(condition *iamlivecatalog.Condition, parameters map[strin
 	case "notexists":
 		result = !present
 	case "equals":
-		result = present && anyString(values, func(v string) bool { return v == condition.RHS })
+		result = present && anyString(ctx, values, func(v string) bool { return v == condition.RHS })
 	case "notequals":
-		result = !present || !anyString(values, func(v string) bool { return v == condition.RHS })
+		result = !present || !anyString(ctx, values, func(v string) bool { return v == condition.RHS })
 	case "contains":
-		result = present && anyString(values, func(v string) bool { return strings.Contains(v, condition.RHS) })
+		result = present && anyString(ctx, values, func(v string) bool { return strings.Contains(v, condition.RHS) })
 	case "icontains":
-		result = present && anyString(values, func(v string) bool { return strings.Contains(strings.ToLower(v), strings.ToLower(condition.RHS)) })
+		result = present && anyString(ctx, values, func(v string) bool { return strings.Contains(strings.ToLower(v), strings.ToLower(condition.RHS)) })
 	case "startswith":
-		result = present && anyString(values, func(v string) bool { return strings.HasPrefix(v, condition.RHS) })
+		result = present && anyString(ctx, values, func(v string) bool { return strings.HasPrefix(v, condition.RHS) })
 	case "notstartswith":
-		result = !present || !anyString(values, func(v string) bool { return strings.HasPrefix(v, condition.RHS) })
+		result = !present || !anyString(ctx, values, func(v string) bool { return strings.HasPrefix(v, condition.RHS) })
 	default:
 		return conditionUnknown
 	}
 	if condition.And != nil {
-		right := evaluateCondition(condition.And, parameters)
+		right := evaluateCondition(ctx, condition.And, parameters)
 		if right == conditionUnknown {
 			return conditionUnknown
 		}
@@ -401,28 +515,40 @@ func evaluateCondition(condition *iamlivecatalog.Condition, parameters map[strin
 	}
 	return conditionFalse
 }
-func anyString(values []string, predicate func(string) bool) bool {
+func anyString(ctx context.Context, values []string, predicate func(string) bool) bool {
 	for _, v := range values {
+		if ctx != nil && ctx.Err() != nil {
+			return false
+		}
 		if predicate(v) {
 			return true
 		}
 	}
 	return false
 }
-func pathValues(root map[string]awsrequest.Value, path string) ([]string, bool, bool) {
+func pathValues(ctx context.Context, root map[string]awsrequest.Value, path string) ([]string, bool, bool) {
 	if path == "" {
 		return nil, false, false
 	}
 	current := []awsrequest.Value{{Kind: awsrequest.ValueObject, Object: root}}
 	for n, part := range strings.Split(path, ".") {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, false, false
+		}
 		array := strings.HasSuffix(part, "[]")
 		name := strings.TrimSuffix(part, "[]")
 		var next []awsrequest.Value
 		for _, parent := range current {
+			if ctx != nil && ctx.Err() != nil {
+				return nil, false, false
+			}
 			if parent.Kind != awsrequest.ValueObject {
 				return nil, false, false
 			}
 			for key, value := range parent.Object {
+				if ctx != nil && ctx.Err() != nil {
+					return nil, false, false
+				}
 				if strings.EqualFold(key, name) {
 					next = append(next, value)
 				}
@@ -434,6 +560,9 @@ func pathValues(root map[string]awsrequest.Value, path string) ([]string, bool, 
 		if array {
 			var expanded []awsrequest.Value
 			for _, value := range next {
+				if ctx != nil && ctx.Err() != nil {
+					return nil, false, false
+				}
 				if value.Kind != awsrequest.ValueArray {
 					return nil, false, false
 				}
@@ -444,6 +573,9 @@ func pathValues(root map[string]awsrequest.Value, path string) ([]string, bool, 
 		if n == len(strings.Split(path, "."))-1 {
 			out := []string{}
 			for _, value := range next {
+				if ctx != nil && ctx.Err() != nil {
+					return nil, false, false
+				}
 				if value.Kind != awsrequest.ValueString {
 					return nil, false, false
 				}
@@ -517,29 +649,44 @@ func resourceTypeOccurrence(definition iamlivecatalog.ActionDefinition, resource
 	return 0
 }
 
-func dependencyParameterNames(mapping iamlivecatalog.ActionMapping) []string {
+func dependencyParameterNames(ctx context.Context, mapping iamlivecatalog.ActionMapping) []string {
 	var names []string
-	for _, template := range append([]string{mapping.ARNOverride}, resourceTemplates(mapping)...) {
-		names = append(names, templateNames(template)...)
+	for _, template := range append([]string{mapping.ARNOverride}, resourceTemplatesContext(ctx, mapping)...) {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
+		names = append(names, templateNames(ctx, template)...)
 	}
 	if len(names) == 0 {
 		names = []string{"Role", "RoleArn", "TaskRoleArn", "ExecutionRoleArn", "IamRoleArn"}
 	}
-	return uniqueStrings(names)
+	return uniqueStringsContext(ctx, names)
 }
 func resourceTemplates(mapping iamlivecatalog.ActionMapping) []string {
+	return resourceTemplatesContext(context.Background(), mapping)
+}
+func resourceTemplatesContext(ctx context.Context, mapping iamlivecatalog.ActionMapping) []string {
 	var out []string
 	for _, r := range mapping.Resources {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
 		out = append(out, r.Template)
 	}
 	for _, r := range mapping.ConditionMappings {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
 		out = append(out, r.Template)
 	}
 	return out
 }
-func dependencyValues(mapping iamlivecatalog.ActionMapping, parameters map[string]awsrequest.Value) ([]string, dependencyState) {
+func dependencyValues(ctx context.Context, mapping iamlivecatalog.ActionMapping, parameters map[string]awsrequest.Value) ([]string, dependencyState) {
+	if ctx != nil && ctx.Err() != nil {
+		return nil, dependencyUnknown
+	}
 	if mapping.Condition != nil {
-		state := evaluateCondition(mapping.Condition, parameters)
+		state := evaluateCondition(ctx, mapping.Condition, parameters)
 		if state == conditionFalse {
 			return nil, dependencyFalse
 		}
@@ -547,20 +694,26 @@ func dependencyValues(mapping iamlivecatalog.ActionMapping, parameters map[strin
 			return nil, dependencyUnknown
 		}
 	}
-	names := dependencyParameterNames(mapping)
+	names := dependencyParameterNames(ctx, mapping)
+	if ctx != nil && ctx.Err() != nil {
+		return nil, dependencyUnknown
+	}
 	var values []string
 	if mapping.ARNOverride != "" {
-		values = templateValues(mapping.ARNOverride, parameters)
+		values = templateValues(ctx, mapping.ARNOverride, parameters)
 	} else {
-		for _, template := range resourceTemplates(mapping) {
-			values = append(values, templateValues(template, parameters)...)
+		for _, template := range resourceTemplatesContext(ctx, mapping) {
+			if ctx != nil && ctx.Err() != nil {
+				return nil, dependencyUnknown
+			}
+			values = append(values, templateValues(ctx, template, parameters)...)
 		}
 	}
 	if strings.Contains(strings.ToLower(mapping.ARNOverride), "iftruthy") {
-		if invalidNamedValue(parameters, names...) {
+		if invalidNamedValueContext(ctx, parameters, names...) {
 			return nil, dependencyUnknown
 		}
-		if len(Find(parameters, names...)) == 0 {
+		if len(FindContext(ctx, parameters, names...)) == 0 {
 			return nil, dependencyFalse
 		}
 	}
@@ -572,6 +725,10 @@ func dependencyValues(mapping iamlivecatalog.ActionMapping, parameters map[strin
 func dependencyParameterNamesDummy() {}
 
 func invalidNamedValue(parameters map[string]awsrequest.Value, names ...string) bool {
+	return invalidNamedValueContext(context.Background(), parameters, names...)
+}
+
+func invalidNamedValueContext(ctx context.Context, parameters map[string]awsrequest.Value, names ...string) bool {
 	wanted := map[string]bool{}
 	for _, name := range names {
 		wanted[strings.ToLower(name)] = true
@@ -582,6 +739,9 @@ func invalidNamedValue(parameters map[string]awsrequest.Value, names ...string) 
 			return true
 		}
 		for key, value := range values {
+			if ctx != nil && ctx.Err() != nil {
+				return true
+			}
 			if wanted[strings.ToLower(key)] && value.Kind != awsrequest.ValueString {
 				return true
 			}
@@ -609,16 +769,22 @@ const (
 	dependencyTrue
 )
 
-func templateValues(template string, parameters map[string]awsrequest.Value) []string {
+func templateValues(ctx context.Context, template string, parameters map[string]awsrequest.Value) []string {
 	var out []string
-	for _, name := range templateNames(template) {
-		out = append(out, Find(parameters, name)...)
+	for _, name := range templateNames(ctx, template) {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
+		out = append(out, FindContext(ctx, parameters, name)...)
 	}
 	return out
 }
-func templateNames(template string) []string {
+func templateNames(ctx context.Context, template string) []string {
 	var out []string
 	for {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
 		i := strings.Index(template, "${")
 		if i < 0 {
 			break
@@ -637,12 +803,18 @@ func templateNames(template string) []string {
 		}
 		template = template[j+1:]
 	}
-	return uniqueStrings(out)
+	return uniqueStringsContext(ctx, out)
 }
 func uniqueStrings(values []string) []string {
+	return uniqueStringsContext(context.Background(), values)
+}
+func uniqueStringsContext(ctx context.Context, values []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, value := range values {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
 		key := strings.ToLower(value)
 		if value != "" && !seen[key] {
 			seen[key] = true
@@ -658,7 +830,7 @@ func (a *Adapter) LookupOperation(service, operation string) (string, data.Entry
 		return "", data.Entry{}, err
 	}
 	if len(result.PrimaryOccurrences) == 0 {
-		return "", data.Entry{}, fmt.Errorf("operation has no primary occurrence")
+		return "", data.Entry{}, adapterFailure(FailureCatalogInconsistency, nil)
 	}
 	primary := result.PrimaryOccurrences[0]
 	entry := entryForAction(primary.Action, primary.Definition, result.Operation, primary.Mapping)
@@ -683,6 +855,11 @@ func (a *Adapter) Map(context.Context, *awsrequest.DecodedAWSRequest) (*awsreque
 }
 
 func Find(values map[string]awsrequest.Value, names ...string) []string {
+	return FindContext(context.Background(), values, names...)
+}
+
+// FindContext extracts only named string evidence while observing ctx.
+func FindContext(ctx context.Context, values map[string]awsrequest.Value, names ...string) []string {
 	want := map[string]bool{}
 	for _, name := range names {
 		want[strings.ToLower(name)] = true
@@ -690,6 +867,9 @@ func Find(values map[string]awsrequest.Value, names ...string) []string {
 	var out []string
 	var walk func(string, awsrequest.Value, int)
 	walk = func(key string, value awsrequest.Value, depth int) {
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
 		if depth > 16 {
 			return
 		}
@@ -703,6 +883,9 @@ func Find(values map[string]awsrequest.Value, names ...string) []string {
 		}
 		if value.Kind == awsrequest.ValueArray {
 			for _, item := range value.Array {
+				if ctx != nil && ctx.Err() != nil {
+					return
+				}
 				if item.Kind == awsrequest.ValueObject {
 					for k, v := range item.Object {
 						walk(k, v, depth+1)
@@ -712,6 +895,9 @@ func Find(values map[string]awsrequest.Value, names ...string) []string {
 		}
 	}
 	for key, value := range values {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
 		walk(key, value, 0)
 	}
 	return out

@@ -24,6 +24,7 @@ import (
 	"github.com/kordn-ai/kordn/internal/awserror"
 	"github.com/kordn-ai/kordn/internal/awsrequest"
 	"github.com/kordn-ai/kordn/internal/cache"
+	"github.com/kordn-ai/kordn/internal/iammap"
 	"github.com/kordn-ai/kordn/internal/observe"
 	"github.com/kordn-ai/kordn/internal/pki"
 	"github.com/kordn-ai/kordn/internal/policy"
@@ -1349,18 +1350,21 @@ func mapReason(err error) string {
 	if err == nil {
 		return "mapping_low_confidence"
 	}
-	x := strings.ToLower(err.Error())
-	if strings.Contains(x, "dependent ") || strings.Contains(x, "dependent-") {
+	// Check specific failures through the complete wrapping chain first. This
+	// keeps a generic outer diagnostic from hiding a required dependency or
+	// primary-resource failure.
+	if errors.Is(err, iammap.ErrUnresolvedDependency) {
 		return "dependent_permission_unresolved"
 	}
-	if strings.Contains(x, "mapping has no primary action") {
+	if errors.Is(err, iammap.ErrUnresolvedPrimaryResource) {
 		return "resource_unresolved"
 	}
-	if strings.Contains(x, "unknown operation") {
+	if errors.Is(err, iammap.ErrUnknownWireOperation) || errors.Is(err, iammap.ErrAmbiguousWireOperation) {
 		return "unknown_operation"
 	}
-	if strings.Contains(x, "unresolved") {
-		return "resource_unresolved"
+	var failure *iammap.MappingError
+	if errors.As(err, &failure) && failure != nil {
+		return "mapping_low_confidence"
 	}
 	return "mapping_low_confidence"
 }
