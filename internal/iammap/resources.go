@@ -20,7 +20,7 @@ func resourceForPrimaryContext(ctx context.Context, req *awsrequest.DecodedAWSRe
 	if err := ctx.Err(); err != nil {
 		return nil, awsrequest.ScopeUnresolved, err
 	}
-	return resourceFor(req, primary.ResourceType, action)
+	return resourceForContext(ctx, req, primary.ResourceType, action)
 }
 
 func resourceForPrimary(req *awsrequest.DecodedAWSRequest, primary iamliveadapter.PrimaryOccurrence, action string) ([]string, awsrequest.ScopeKind, error) {
@@ -28,14 +28,24 @@ func resourceForPrimary(req *awsrequest.DecodedAWSRequest, primary iamliveadapte
 }
 
 func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]string, awsrequest.ScopeKind, error) {
+	return resourceForContext(context.Background(), req, kind, action)
+}
+
+func resourceForContext(ctx context.Context, req *awsrequest.DecodedAWSRequest, kind, action string) ([]string, awsrequest.ScopeKind, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, awsrequest.ScopeUnresolved, err
+	}
 	kind = strings.TrimSuffix(kind, "*")
 	if kind == "global" {
 		return []string{"*"}, awsrequest.ScopeKnownGlobal, nil
 	}
 	switch kind {
 	case "object":
-		b := parameterString(req.Parameters, "Bucket")
-		k := parameterString(req.Parameters, "Key")
+		b := parameterStringContext(ctx, req.Parameters, "Bucket")
+		k := parameterStringContext(ctx, req.Parameters, "Key")
 		if b == "" || k == "" {
 			b, k = s3PathParts(req.CanonicalPath)
 		}
@@ -48,7 +58,7 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		}
 		return []string{a}, awsrequest.ScopeExact, nil
 	case "bucket":
-		b := parameterString(req.Parameters, "Bucket")
+		b := parameterStringContext(ctx, req.Parameters, "Bucket")
 		if b == "" {
 			b, _ = s3PathParts(req.CanonicalPath)
 		}
@@ -64,8 +74,8 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		if req.CallerAccountID == "" || req.Region == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		cluster := parameterString(req.Parameters, "Cluster", "ClusterArn")
-		name := parameterString(req.Parameters, "Service", "ServiceName")
+		cluster := parameterStringContext(ctx, req.Parameters, "Cluster", "ClusterArn")
+		name := parameterStringContext(ctx, req.Parameters, "Service", "ServiceName")
 		if cluster == "" || name == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -78,7 +88,7 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		if req.CallerAccountID == "" || req.Region == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		name := parameterString(req.Parameters, "TaskDefinition")
+		name := parameterStringContext(ctx, req.Parameters, "TaskDefinition")
 		if name == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -97,12 +107,15 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		if req.CallerAccountID == "" || req.Region == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		ids := parameterStrings(req.Parameters, "InstanceIds")
+		ids := parameterStringsContext(ctx, req.Parameters, "InstanceIds")
 		if len(ids) == 0 {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
 		out := []string{}
 		for _, id := range ids {
+			if err := ctx.Err(); err != nil {
+				return nil, awsrequest.ScopeUnresolved, err
+			}
 			if !validID(id, "i-") {
 				return nil, awsrequest.ScopeUnresolved, errors.New("invalid EC2 instance id")
 			}
@@ -120,7 +133,7 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		if req.CallerAccountID == "" || req.Region == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		n := parameterString(req.Parameters, "FunctionName")
+		n := parameterStringContext(ctx, req.Parameters, "FunctionName")
 		if n == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -137,11 +150,11 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		return []string{a}, awsrequest.ScopeExact, nil
 	case "table":
 		if req.Service == "dynamodb" && req.Operation == "BatchExecuteStatement" {
-			return dynamoStatementARNs(req, action)
+			return dynamoStatementARNs(ctx, req, action)
 		}
-		return namedARN(req, "dynamodb", "TableName", "table/")
+		return namedARNContext(ctx, req, "dynamodb", "TableName", "table/")
 	case "dataset":
-		name := parameterString(req.Parameters, "DatasetId", "Namespace")
+		name := parameterStringContext(ctx, req.Parameters, "DatasetId", "Namespace")
 		if name == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -157,7 +170,7 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		// STS supplies a complete, potentially cross-account RoleArn. IAM
 		// role APIs instead supply a RoleName scoped to the configured caller.
 		if req.Operation == "AssumeRole" {
-			n := parameterString(req.Parameters, "RoleArn")
+			n := parameterStringContext(ctx, req.Parameters, "RoleArn")
 			if n == "" {
 				return nil, awsrequest.ScopeUnresolved, nil
 			}
@@ -170,7 +183,7 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		if req.CallerAccountID == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		n := parameterString(req.Parameters, "RoleName")
+		n := parameterStringContext(ctx, req.Parameters, "RoleName")
 		if n == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -180,13 +193,13 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 		}
 		return []string{a}, awsrequest.ScopeExact, nil
 	case "log-group":
-		return namedARN(req, "logs", "LogGroupName", "log-group:")
+		return namedARNContext(ctx, req, "logs", "LogGroupName", "log-group:")
 	case "log-stream":
 		if req.CallerAccountID == "" || req.Region == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		g := parameterString(req.Parameters, "LogGroupName")
-		s := parameterString(req.Parameters, "LogStreamName")
+		g := parameterStringContext(ctx, req.Parameters, "LogGroupName")
+		s := parameterStringContext(ctx, req.Parameters, "LogStreamName")
 		if g == "" || s == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -202,7 +215,7 @@ func resourceFor(req *awsrequest.DecodedAWSRequest, kind, action string) ([]stri
 
 // BatchExecuteStatement carries several PartiQL statements. Each applicable
 // statement contributes its table ARN to the corresponding PartiQL action.
-func dynamoStatementARNs(req *awsrequest.DecodedAWSRequest, action string) ([]string, awsrequest.ScopeKind, error) {
+func dynamoStatementARNs(ctx context.Context, req *awsrequest.DecodedAWSRequest, action string) ([]string, awsrequest.ScopeKind, error) {
 	var statements []awsrequest.Value
 	for key, value := range req.Parameters {
 		if strings.EqualFold(key, "Statements") {
@@ -220,10 +233,13 @@ func dynamoStatementARNs(req *awsrequest.DecodedAWSRequest, action string) ([]st
 	seen := map[string]bool{}
 	var resources []string
 	for _, item := range statements {
+		if err := ctx.Err(); err != nil {
+			return nil, awsrequest.ScopeUnresolved, err
+		}
 		if item.Kind != awsrequest.ValueObject {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
-		statement := parameterString(item.Object, "Statement")
+		statement := parameterStringContext(ctx, item.Object, "Statement")
 		if statement == "" {
 			return nil, awsrequest.ScopeUnresolved, nil
 		}
@@ -308,10 +324,16 @@ func validDynamoTableName(name string) bool {
 }
 
 func namedARN(req *awsrequest.DecodedAWSRequest, service, param, prefix string) ([]string, awsrequest.ScopeKind, error) {
+	return namedARNContext(context.Background(), req, service, param, prefix)
+}
+func namedARNContext(ctx context.Context, req *awsrequest.DecodedAWSRequest, service, param, prefix string) ([]string, awsrequest.ScopeKind, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return nil, awsrequest.ScopeUnresolved, ctx.Err()
+	}
 	if req.CallerAccountID == "" || req.Region == "" {
 		return nil, awsrequest.ScopeUnresolved, nil
 	}
-	n := parameterString(req.Parameters, param)
+	n := parameterStringContext(ctx, req.Parameters, param)
 	if n == "" {
 		return nil, awsrequest.ScopeUnresolved, nil
 	}
@@ -322,15 +344,24 @@ func namedARN(req *awsrequest.DecodedAWSRequest, service, param, prefix string) 
 	return []string{a}, awsrequest.ScopeExact, nil
 }
 func parameterString(p map[string]awsrequest.Value, names ...string) string {
+	return parameterStringContext(context.Background(), p, names...)
+}
+func parameterStringContext(ctx context.Context, p map[string]awsrequest.Value, names ...string) string {
 	for _, want := range names {
+		if ctx != nil && ctx.Err() != nil {
+			return ""
+		}
 		found := ""
 		ambiguous := false
 		var walk func(map[string]awsrequest.Value, int)
 		walk = func(m map[string]awsrequest.Value, d int) {
-			if d > 16 || ambiguous {
+			if d > 16 || ambiguous || (ctx != nil && ctx.Err() != nil) {
 				return
 			}
 			for k, v := range m {
+				if ctx != nil && ctx.Err() != nil {
+					return
+				}
 				if strings.EqualFold(k, want) {
 					if v.Kind != awsrequest.ValueString || v.String == "" {
 						ambiguous = true
@@ -355,13 +386,22 @@ func parameterString(p map[string]awsrequest.Value, names ...string) string {
 	return ""
 }
 func parameterStrings(p map[string]awsrequest.Value, name string) []string {
+	return parameterStringsContext(context.Background(), p, name)
+}
+func parameterStringsContext(ctx context.Context, p map[string]awsrequest.Value, name string) []string {
 	for k, v := range p {
+		if ctx != nil && ctx.Err() != nil {
+			return nil
+		}
 		if !strings.EqualFold(k, name) {
 			continue
 		}
 		if v.Kind == awsrequest.ValueArray {
 			r := []string{}
 			for _, x := range v.Array {
+				if ctx != nil && ctx.Err() != nil {
+					return nil
+				}
 				if x.Kind != awsrequest.ValueString {
 					return nil
 				}

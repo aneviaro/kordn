@@ -3,7 +3,6 @@ package iammap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -26,7 +25,7 @@ func dependencies(ctx context.Context, req *awsrequest.DecodedAWSRequest, expect
 		}
 		want := canonicalAction(wanted)
 		if want == "" {
-			return nil, fmt.Errorf("unknown dependent permission %q", wanted)
+			return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 		}
 		if expectedCounts[want] == 0 {
 			order = append(order, want)
@@ -41,25 +40,25 @@ func dependencies(ctx context.Context, req *awsrequest.DecodedAWSRequest, expect
 		}
 		want := canonicalAction(candidate.Action.Service + ":" + candidate.Action.Name)
 		if want == "" {
-			return nil, errors.New("unknown dependent permission occurrence")
+			return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 		}
 		if candidate.Applicability == iamliveadapter.ApplicabilityUnknown {
-			return nil, errors.New("uncertain dependent-action applicability")
+			return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 		}
 		candidateCounts[want]++
 		grouped[want] = append(grouped[want], candidate)
 	}
 	if len(candidateCounts) != len(expectedCounts) {
-		return nil, errors.New("iamlive dependency set disagrees")
+		return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 	}
 	for action, count := range expectedCounts {
 		if candidateCounts[action] != count {
-			return nil, fmt.Errorf("iamlive dependency occurrence multiplicity disagrees: %s", action)
+			return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 		}
 	}
 	for action := range candidateCounts {
 		if expectedCounts[action] == 0 {
-			return nil, fmt.Errorf("extra dependent mapping %s", action)
+			return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 		}
 	}
 
@@ -76,29 +75,35 @@ func dependencies(ctx context.Context, req *awsrequest.DecodedAWSRequest, expect
 			if len(names) == 0 {
 				names = []string{"Role", "RoleArn", "TaskRoleArn", "ExecutionRoleArn", "IamRoleArn"}
 			}
-			expectedResources := iamliveadapter.Find(req.Parameters, names...)
+			expectedResources := iamliveadapter.FindContext(ctx, req.Parameters, names...)
 			actual := append([]string(nil), candidate.Resources...)
 			if len(expectedResources) == 0 || len(expectedResources) != len(actual) {
-				return nil, errors.New("iamlive dependency resources disagree")
+				return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 			}
 			for i, value := range expectedResources {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				var err error
 				expectedResources[i], err = validateDependencyARN(want, value, req.Partition)
 				if err != nil || expectedResources[i] == "" {
-					return nil, errors.New("malformed dependent ARN")
+					return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 				}
 			}
 			for i, value := range actual {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				var err error
 				actual[i], err = validateDependencyARN(want, value, req.Partition)
 				if err != nil || actual[i] == "" {
-					return nil, errors.New("malformed dependent ARN")
+					return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 				}
 			}
 			sort.Strings(expectedResources)
 			sort.Strings(actual)
-			if !sameStrings(expectedResources, actual) {
-				return nil, errors.New("iamlive dependency resources disagree")
+			if !sameStringsContext(ctx, expectedResources, actual) {
+				return nil, mappingFailure(MappingFailureUnresolvedDependency, "dependency", nil)
 			}
 			scope := awsrequest.ScopeExact
 			if len(actual) > 1 {
@@ -111,10 +116,16 @@ func dependencies(ctx context.Context, req *awsrequest.DecodedAWSRequest, expect
 }
 
 func sameStrings(a, b []string) bool {
+	return sameStringsContext(context.Background(), a, b)
+}
+func sameStringsContext(ctx context.Context, a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
+		if err := ctx.Err(); err != nil {
+			return false
+		}
 		if a[i] != b[i] {
 			return false
 		}

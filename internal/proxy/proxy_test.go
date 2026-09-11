@@ -25,6 +25,7 @@ import (
 	"github.com/kordn-ai/kordn/internal/audit"
 	"github.com/kordn-ai/kordn/internal/awserror"
 	"github.com/kordn-ai/kordn/internal/awsrequest"
+	"github.com/kordn-ai/kordn/internal/iammap"
 	"github.com/kordn-ai/kordn/internal/observe"
 	"github.com/kordn-ai/kordn/internal/policy"
 	"github.com/kordn-ai/kordn/internal/runtime"
@@ -737,11 +738,12 @@ func TestMapReasonPreservesSpecificMappingFailure(t *testing.T) {
 		err  error
 		want string
 	}{
-		{name: "dependent evidence wrapped as operation lookup", err: errors.New("unknown operation lambda:CreateFunction: missing dependent action mapping lambda:createfunction -> lambda:passcapacityprovider"), want: "dependent_permission_unresolved"},
-		{name: "unresolved applicability has no primary action", err: errors.New("unknown operation dynamodb:BatchExecuteStatement: mapping has no primary action"), want: "resource_unresolved"},
-		{name: "unknown operation", err: errors.New("unknown operation iam:NotInCatalog"), want: "unknown_operation"},
-		{name: "unknown operation containing dependent", err: errors.New("unknown operation iam:DependentThing"), want: "unknown_operation"},
-		{name: "unresolved resource", err: errors.New("unresolved primary resource"), want: "resource_unresolved"},
+		{name: "dependent evidence wrapped as operation lookup", err: iammap.ErrUnresolvedDependency, want: "dependent_permission_unresolved"},
+		{name: "unresolved applicability has no primary action", err: iammap.ErrUnresolvedPrimaryResource, want: "resource_unresolved"},
+		{name: "unknown operation", err: iammap.ErrUnknownWireOperation, want: "unknown_operation"},
+		{name: "ambiguous operation", err: iammap.ErrAmbiguousWireOperation, want: "unknown_operation"},
+		{name: "unknown operation containing dependent", err: iammap.ErrUnknownWireOperation, want: "unknown_operation"},
+		{name: "untyped failure defaults low confidence", err: errors.New("unresolved primary resource"), want: "mapping_low_confidence"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
