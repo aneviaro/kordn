@@ -195,6 +195,139 @@ intercept AWS commands routed through its local proxy boundary and perform
 authorization before any request is forwarded to AWS. This must remain a single
 local `kordn run` process, not a separate daemon or network control plane.
 
+### Current endpoint boundary
+
+The pinned iamlive catalog contains 426 API model identifiers, but the positive
+commercial endpoint classifier currently recognizes only these 16 endpoint
+families: `sts`, `iam`, `s3`, `ec2`, `ecs`, `monitoring` (CloudWatch), `logs`,
+`lambda`, `dynamodb`, `kms`, `sqs`, `sns`, `events`, `cloudformation`,
+`route53`, and `organizations`. The other 410 catalog identifiers are not yet
+interceptable through the production AWS path. They are grouped below by
+estimated roadmap priority, with identifiers alphabetized within each tier.
+This is a prioritization, not an official AWS popularity ranking.
+
+#### Tier 1 — highest priority
+
+`accessanalyzer`, `acm`, `apigateway`, `apigatewayv2`, `athena`, `autoscaling`,
+`backup`, `bedrock`, `bedrock-runtime`, `budgets`, `ce`, `cloudfront`,
+`cloudtrail`, `cognito-identity`, `cognito-idp`, `config`, `ebs`, `ecr`, `eks`,
+`elasticache`, `elasticfilesystem`, `elasticloadbalancing`,
+`elasticloadbalancingv2`, `elasticmapreduce`, `firehose`, `glue`, `guardduty`,
+`kinesis`, `opensearch`, `rds`, `redshift`, `s3control`, `sagemaker`,
+`secretsmanager`, `service-quotas`, `sesv2`, `ssm`, `sso`, `sso-admin`, `states`,
+`wafv2`, `xray`
+
+#### Tier 2 — common production services
+
+`account`, `acm-pca`, `amplify`, `appconfig`, `appconfigdata`, `appflow`,
+`application-autoscaling`, `appmesh`, `apprunner`, `appstream`, `appsync`,
+`auditmanager`, `autoscaling-plans`, `batch`, `bedrock-agent`,
+`bedrock-agent-runtime`, `chatbot`, `cloudcontrol`, `codeartifact`, `codebuild`,
+`codecommit`, `codeconnections`, `codedeploy`, `codepipeline`,
+`compute-optimizer`, `controltower`, `cur`, `databrew`, `dataexchange`,
+`datasync`, `datazone`, `dax`, `directconnect`, `dlm`, `dms`, `docdb`, `drs`,
+`ds`, `ecr-public`, `eks-auth`, `elasticbeanstalk`, `emr-containers`,
+`emr-serverless`, `fis`, `fms`, `fsx`, `globalaccelerator`, `grafana`,
+`greengrass`, `greengrassv2`, `health`, `identitystore`, `imagebuilder`,
+`inspector2`, `internetmonitor`, `iot`, `iot-data`, `iotevents`, `iotsitewise`,
+`kafka`, `kafkaconnect`, `keyspaces`, `lakeformation`, `license-manager`,
+`lightsail`, `macie2`, `mediaconvert`, `memorydb`, `mgn`, `mq`, `mwaa`,
+`neptune`, `network-firewall`, `networkmanager`, `opensearchserverless`, `osis`,
+`outposts`, `personalize`, `pinpoint`, `pipes`, `pricing`, `qbusiness`,
+`quicksight`, `ram`, `rbin`, `rds-data`, `redshift-data`, `redshift-serverless`,
+`rekognition`, `resiliencehub`, `resource-explorer-2`, `resource-groups`,
+`resourcegroupstaggingapi`, `rolesanywhere`, `route53domains`, `route53profiles`,
+`route53resolver`, `s3outposts`, `savingsplans`, `scheduler`, `schemas`,
+`securityhub`, `securitylake`, `serverlessrepo`, `servicecatalog`,
+`servicecatalog-appregistry`, `servicediscovery`, `shield`, `signer`, `snowball`,
+`storagegateway`, `support`, `synthetics`, `textract`, `timestream-query`,
+`timestream-write`, `transcribe`, `transfer`, `translate`, `trustedadvisor`,
+`verifiedpermissions`, `vpc-lattice`, `waf`, `wellarchitected`, `workspaces`
+
+#### Tier 3 — specialized or lower-frequency APIs
+
+The remaining catalog identifiers are lower-priority specialized APIs: `aiops`,
+`amp`, `amplifybackend`, `amplifyuibuilder`, `apigatewaymanagementapi`,
+`appfabric`, `appintegrations`, `application-insights`, `application-signals`,
+`applicationcostprofiler`, `arc-region-switch`, `arc-zonal-shift`, `artifact`,
+`AWSMigrationHub`, `b2bi`, `backup-gateway`, `backupsearch`, `bcm-dashboards`,
+`bcm-data-exports`, `bcm-pricing-calculator`, `bcm-recommended-actions`,
+`bedrock-agentcore`, `bedrock-agentcore-control`, `bedrock-data-automation`,
+`bedrock-data-automation-runtime`, `billing`, `billingconductor`, `braket`,
+`chime`, `chime-sdk-identity`, `chime-sdk-media-pipelines`,
+`chime-sdk-meetings`, `chime-sdk-messaging`, `chime-sdk-voice`, `cleanrooms`,
+`cleanroomsml`, `cloud9`, `clouddirectory`, `cloudfront-keyvaluestore`,
+`cloudhsm`, `cloudhsmv2`, `cloudsearch`, `cloudsearchdomain`, `cloudtrail-data`,
+`codecatalyst`, `codeguru-reviewer`, `codeguru-security`, `codeguruprofiler`,
+`codestar-connections`, `codestar-notifications`, `cognito-sync`, `comprehend`,
+`comprehendmedical`, `compute-optimizer-automation`, `connect`,
+`connect-contact-lens`, `connectcampaigns`, `connectcampaignsv2`, `connectcases`,
+`connecthealth`, `connectparticipant`, `controlcatalog`, `cost-optimization-hub`,
+`customer-profiles`, `datapipeline`, `deadline`, `detective`, `devicefarm`,
+`devops-agent`, `devops-guru`, `directory-service-data`, `discovery`,
+`docdb-elastic`, `dsql`, `ec2-instance-connect`, `elementalinference`, `email`,
+`entitlement.marketplace`, `entityresolution`, `es`, `eventbridge`, `evs`,
+`finspace`, `finspace-data`, `forecast`, `forecastquery`, `frauddetector`,
+`freetier`, `gamelift`, `gameliftstreams`, `geo-maps`, `geo-places`, `geo-routes`,
+`glacier`, `groundstation`, `healthlake`, `importexport`, `inspector`,
+`inspector-scan`, `interconnect`, `invoicing`, `iot-jobs-data`,
+`iot-managed-integrations`, `iotdeviceadvisor`, `iotevents-data`, `iotfleetwise`,
+`iotsecuretunneling`, `iotthingsgraph`, `iottwinmaker`, `iotwireless`, `ivs`,
+`ivs-realtime`, `ivschat`, `kendra`, `kendra-ranking`, `keyspacesstreams`,
+`kinesis-video-archived-media`, `kinesis-video-media`,
+`kinesis-video-signaling`, `kinesis-video-webrtc-storage`, `kinesisanalytics`,
+`kinesisanalyticsv2`, `kinesisvideo`, `launch-wizard`, `lex-models`,
+`license-manager-linux-subscriptions`, `license-manager-user-subscriptions`,
+`location`, `lookoutequipment`, `m2`, `machinelearning`, `mailmanager`,
+`managedblockchain`, `managedblockchain-query`, `marketplace-agreement`,
+`marketplace-catalog`, `marketplace-deployment`, `marketplace-discovery`,
+`marketplace-reporting`, `marketplacecommerceanalytics`, `mediaconnect`,
+`medialive`, `mediapackage`, `mediapackage-vod`, `mediapackagev2`, `mediastore`,
+`mediastore-data`, `mediatailor`, `medical-imaging`, `meteringmarketplace`,
+`migration-hub-refactor-spaces`, `migrationhub-config`,
+`migrationhuborchestrator`, `migrationhubstrategy`, `models.lex.v2`, `mpa`,
+`mturk-requester`, `mwaa-serverless`, `neptune-graph`, `neptunedata`,
+`networkflowmonitor`, `networkmonitor`, `notifications`, `notificationscontacts`,
+`nova-act`, `oam`, `observabilityadmin`, `odb`, `omics`, `panorama`,
+`partnercentral-account`, `partnercentral-benefits`, `partnercentral-channel`,
+`partnercentral-selling`, `payment-cryptography`, `payment-cryptography-data`,
+`pca-connector-ad`, `pca-connector-scep`, `pcs`, `personalize-events`,
+`personalize-runtime`, `pi`, `pinpoint-email`, `pinpoint-sms-voice-v2`, `polly`,
+`proton`, `qapps`, `qconnect`, `repostspace`, `route53-recovery-cluster`,
+`route53-recovery-control-config`, `route53-recovery-readiness`,
+`route53globalresolver`, `rtbfabric`, `rum`, `runtime.lex`, `runtime.lex.v2`,
+`runtime.sagemaker`, `s3files`, `s3tables`, `s3vectors`, `sagemaker-a2i-runtime`,
+`sagemaker-edge`, `sagemaker-featurestore-runtime`, `sagemaker-geospatial`,
+`sagemaker-metrics`, `sagemaker-runtime-http2`, `sdb`, `security-ir`,
+`securityagent`, `signer-data`, `signin`, `simpledbv2`, `simspaceweaver`,
+`sms-voice`, `snow-device-management`, `socialmessaging`, `ssm-contacts`,
+`ssm-guiconnect`, `ssm-incidents`, `ssm-quicksetup`, `ssm-sap`, `sso-oidc`,
+`streams.dynamodb`, `supplychain`, `support-app`, `sustainability`, `swf`,
+`taxsettings`, `timestream-influxdb`, `tnb`, `transcribe-streaming`, `uxc`,
+`voice-id`, `waf-regional`, `wickr`, `wisdom`, `workdocs`, `workmail`,
+`workmailmessageflow`, `workspaces-instances`, `workspaces-thin-client`,
+`workspaces-web`
+
+Expansion must add endpoint rules independently of iamlive operation mappings;
+endpoint prefixes alone are not sufficient to safely activate TLS interception.
+The endpoint model must account for partition, region, signing service, global
+versus regional scope, FIPS, dual-stack, `api.aws`, account-scoped, VPC, and
+service-specific endpoint variants without turning non-AWS HTTPS into inspected
+traffic.
+
+### Currently unsupported request paths
+
+Even for a recognized endpoint family, Kordn currently rejects operations that
+are absent from, ambiguous in, or incompletely mapped by the pinned catalog;
+unresolved resources or dependent permissions; GovCloud and China partitions;
+uncatalogued endpoint forms such as VPC endpoints and specialized S3 access,
+accelerate, or virtual-hosted forms; SigV4a; query-presigned requests;
+SigV4 streaming-chunk uploads; signed AWS event streams; unsigned or anonymous
+requests; CRT-only transports that cannot fall back to HTTP/1.1; and bodies above
+configured safe buffering/spooling limits. Lambda `CreateFunction` is a known
+catalog disagreement and currently fails closed because
+`lambda:PassCapacityProvider` lacks matching extraction evidence.
+
 ### Desired behavior
 
 - Provide a clearly documented command or flag to start and stop the background
