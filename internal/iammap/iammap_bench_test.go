@@ -14,6 +14,7 @@ var (
 	benchmarkLookupResult       iamliveadapter.LookupResult
 	benchmarkLookupErr          error
 	benchmarkCatalogCardinality int
+	benchmarkCatalogOccurrences []iamlivecatalog.OperationOccurrence
 )
 
 func BenchmarkLookupRequest(b *testing.B) {
@@ -79,5 +80,57 @@ func BenchmarkMapping(b *testing.B) {
 }
 
 func BenchmarkStagedMapping(b *testing.B) {
-	BenchmarkMapping(b)
+	catalog, err := iamlivecatalog.Load()
+	if err != nil {
+		b.Fatal(err)
+	}
+	adapter, err := iamliveadapter.New()
+	if err != nil {
+		b.Fatal(err)
+	}
+	mapper, err := NewMapper()
+	if err != nil {
+		b.Fatal(err)
+	}
+	identity := iamliveadapter.WireIdentity{
+		Protocol: awsrequest.ProtocolJSON10,
+		Method:   "POST",
+		Path:     "/",
+		Target:   "DynamoDB_20120810.GetItem",
+	}
+	parameters := map[string]awsrequest.Value{"TableName": {Kind: awsrequest.ValueString, String: "bench-table"}}
+	protocol, _ := awsrequest.AuthoritativeProtocol("dynamodb")
+	request := &awsrequest.DecodedAWSRequest{
+		Partition: "aws", EndpointHost: "dynamodb.us-east-1.amazonaws.com", Service: "dynamodb", Region: "us-east-1",
+		CallerAccountID: "123456789012", Protocol: protocol, Operation: "GetItem", Method: "POST", CanonicalPath: "/",
+		Parameters: parameters, Headers: http.Header{"X-Amz-Target": []string{"DynamoDB_20120810.GetItem"}},
+		PayloadHashMode: awsrequest.PayloadHashSHA256,
+	}
+
+	b.Run("catalog-select", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			benchmarkCatalogOccurrences = catalog.OperationOccurrences("dynamodb", "GetItem")
+			if len(benchmarkCatalogOccurrences) == 0 {
+				b.Fatal("catalog operation unavailable")
+			}
+		}
+	})
+	b.Run("adapter-lookup", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			benchmarkLookupResult, benchmarkLookupErr = adapter.LookupRequest("dynamodb", "GetItem", identity, parameters)
+			if benchmarkLookupErr != nil {
+				b.Fatal(benchmarkLookupErr)
+			}
+		}
+	})
+	b.Run("mapper", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := mapper.Map(context.Background(), request); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
