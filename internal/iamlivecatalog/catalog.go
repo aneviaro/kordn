@@ -432,6 +432,58 @@ func (c *Catalog) ForEachOperationOccurrence(fn func(OperationOccurrence) error)
 	return nil
 }
 
+func (c *Catalog) compactWireOperation(index int) (WireOperation, bool) {
+	if c == nil || c.store == nil || index < 0 || index >= len(c.store.operations) {
+		return WireOperation{}, false
+	}
+	s := c.store
+	record := s.operations[index]
+	if record.occurrence == invalidOccurrenceID || !validSpan(record.queries, len(s.queryRecords)) {
+		return WireOperation{}, false
+	}
+	name, ok := compactString(s, record.name)
+	if !ok {
+		return WireOperation{}, false
+	}
+	method, ok := compactString(s, record.route.method)
+	if !ok {
+		return WireOperation{}, false
+	}
+	uri, ok := compactString(s, record.route.uri)
+	if !ok {
+		return WireOperation{}, false
+	}
+	discriminator, ok := compactString(s, record.route.discriminator)
+	if !ok {
+		return WireOperation{}, false
+	}
+	target, ok := compactString(s, record.route.target)
+	if !ok {
+		return WireOperation{}, false
+	}
+	version, ok := compactString(s, record.route.jsonVersion)
+	if !ok {
+		return WireOperation{}, false
+	}
+	operation := WireOperation{
+		Name: name, State: record.state,
+		Route: Route{Method: method, URI: uri, ResponseCode: record.route.responseCode, QueryDiscriminator: discriminator, TargetPrefix: target, JSONVersion: version},
+	}
+	for offset := uint32(0); offset < record.queries.count; offset++ {
+		query := s.queryRecords[record.queries.start+offset]
+		member, good := compactString(s, query.member)
+		if !good {
+			return WireOperation{}, false
+		}
+		location, good := compactString(s, query.location)
+		if !good {
+			return WireOperation{}, false
+		}
+		operation.QueryBindings = append(operation.QueryBindings, QueryBinding{Member: member, LocationName: location, Required: query.required})
+	}
+	return operation, true
+}
+
 func (c *Catalog) Services() []Service {
 	if c == nil || c.store == nil {
 		return nil
@@ -451,16 +503,22 @@ func (c *Catalog) WireServices() []WireService {
 		return nil
 	}
 	out := make([]WireService, 0, len(c.store.services))
-	for i := range c.store.services {
-		service, ok := c.compactService(i)
-		if !ok {
+	for serviceIndex := range c.store.services {
+		service, ok := c.compactWireService(serviceIndex)
+		if !ok || serviceIndex >= len(c.store.serviceOps) {
 			return nil
 		}
-		wire := WireService{EndpointPrefix: service.EndpointPrefix, APIVersion: service.APIVersion, TargetPrefix: service.TargetPrefix, Protocols: cloneStrings(service.Protocols), Protocol: service.Protocol}
-		for _, operation := range service.Operations {
-			wire.Operations = append(wire.Operations, WireOperation{Name: operation.Name, State: operation.State, Route: operation.Route, QueryBindings: cloneQueryBindings(operation.QueryBindings)})
+		for _, position := range c.store.serviceOps[serviceIndex] {
+			if position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				return nil
+			}
+			operation, good := c.compactWireOperation(position.operation)
+			if !good {
+				return nil
+			}
+			service.Operations = append(service.Operations, operation)
 		}
-		out = append(out, wire)
+		out = append(out, service)
 	}
 	return out
 }
@@ -471,14 +529,20 @@ func (c *Catalog) ForEachWireOperation(fn func(WireService, WireOperation) error
 	if fn == nil {
 		return errors.New("wire operation visitor is nil")
 	}
-	for i := range c.store.services {
-		service, ok := c.compactService(i)
-		if !ok {
+	for serviceIndex := range c.store.services {
+		service, ok := c.compactWireService(serviceIndex)
+		if !ok || serviceIndex >= len(c.store.serviceOps) {
 			return errors.New("catalog canonical service is corrupt")
 		}
-		wire := WireService{EndpointPrefix: service.EndpointPrefix, APIVersion: service.APIVersion, TargetPrefix: service.TargetPrefix, Protocols: cloneStrings(service.Protocols), Protocol: service.Protocol}
-		for _, operation := range service.Operations {
-			if err := fn(wire.Clone(), WireOperation{Name: operation.Name, State: operation.State, Route: operation.Route, QueryBindings: cloneQueryBindings(operation.QueryBindings)}); err != nil {
+		for _, position := range c.store.serviceOps[serviceIndex] {
+			if position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				return errors.New("catalog operation index is corrupt")
+			}
+			operation, good := c.compactWireOperation(position.operation)
+			if !good {
+				return errors.New("catalog wire operation is corrupt")
+			}
+			if err := fn(service.Clone(), operation); err != nil {
 				return err
 			}
 		}
