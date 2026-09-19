@@ -75,7 +75,7 @@ func TestWireIndexUsesImmutableSelectorAndCopiesPublishedCandidates(t *testing.T
 	}
 	spy.services[0].Operations[0].QueryBindings[0].LocationName = "mutated"
 	candidates := idx.query[queryIndexKey{"example", string(ProtocolQuery), "v1", "Op"}]
-	if len(candidates) != 1 || candidates[0].operation.QueryBindings[0].LocationName != "input" {
+	if len(candidates) != 1 || candidates[0].queryBindings[0].LocationName != "input" {
 		t.Fatal("published wire index aliases selector input")
 	}
 	if got := catalogQueryOperation(idx, "example", "v1", ProtocolQuery, "Op"); !got {

@@ -16,7 +16,7 @@ const UpstreamCommit = iamlivecatalog.UpstreamCommit
 
 // AdapterVersion identifies the request-aware adapter contract and its exact
 // upstream evidence pin.
-const AdapterVersion = "iamlive-derived/v2@" + UpstreamCommit
+const AdapterVersion = "iamlive-derived/v3@" + UpstreamCommit
 
 // FailureKind identifies bounded adapter evidence failures.
 type FailureKind uint8

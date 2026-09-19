@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/kordn-ai/kordn/internal/awsrequest"
+	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 	"github.com/kordn-ai/kordn/internal/iammap/iamliveadapter"
 )
 
 var (
-	benchmarkLookupResult iamliveadapter.LookupResult
-	benchmarkLookupErr    error
+	benchmarkLookupResult       iamliveadapter.LookupResult
+	benchmarkLookupErr          error
+	benchmarkCatalogCardinality int
 )
 
 func BenchmarkLookupRequest(b *testing.B) {
@@ -38,6 +40,22 @@ func BenchmarkLookupRequest(b *testing.B) {
 	}
 }
 
+func BenchmarkCatalogResidentLookup(b *testing.B) {
+	catalog, err := iamlivecatalog.Load()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(catalog.InternedStringCardinality()), "interned-strings")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkCatalogCardinality = catalog.OperationCardinality("sts", "GetCallerIdentity")
+		if benchmarkCatalogCardinality != 1 {
+			b.Fatalf("operation cardinality = %d", benchmarkCatalogCardinality)
+		}
+	}
+}
+
 func BenchmarkMapping(b *testing.B) {
 	mapper, err := NewMapper()
 	if err != nil {
@@ -58,4 +76,8 @@ func BenchmarkMapping(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func BenchmarkStagedMapping(b *testing.B) {
+	BenchmarkMapping(b)
 }

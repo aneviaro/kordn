@@ -34,8 +34,14 @@ catalog. `make iamlive-init` prepares it and `make iamlive-check` verifies it
 offline; no runtime network fetch occurs. The only direct adapter boundary is
 `internal/iammap/iamliveadapter`; Kordn-specific endpoint activation,
 authentication, policy, forwarding, credential isolation, and audit remain
-outside it. The catalog retains unresolved evidence rather than widening it to
-`*`; unknown or ambiguous mapping fails closed without forwarding. IAM Query
+outside it. `internal/iamlivecatalog` owns neutral parsing, occurrence identity,
+compact immutable indexes, and request-independent plan validation;
+`internal/awsrequest` owns positive AWS wire classification and typed decode
+stages; `internal/iammap` owns request-aware resource evaluation, authorization
+requirements, and fail-closed decisions. Published plans and indexes are immutable,
+and public catalog views are defensive copies. The catalog retains unresolved
+evidence rather than widening it to `*`; unknown or ambiguous mapping fails closed
+without forwarding. IAM Query
 `ListUsers` is decoded as `iam:ListUsers` with known-global semantics, and
 local IAM XML denials preserve protocol-native responses and audit operation
 identity. No source from unlicensed `iam-agent-proxy` is used.

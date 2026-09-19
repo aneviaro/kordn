@@ -223,9 +223,9 @@ func TestDecisionAuditCarriesMappingProvenance(t *testing.T) {
 	const contentHash = "sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	decoded := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
 	mapping := pipelineMapping(decoded.Operation, "arn:aws:iam::123456789012:role/a")
-	mapping.MapperVersion = "kordn-iammap/v3"
-	mapping.IamLiveVersion = "iamlive-derived/v2@" + commit
-	mapping.AuthorizationDataVersion = "iamlive-catalog/v1@" + commit + "+" + contentHash
+	mapping.MapperVersion = "kordn-iammap/v4"
+	mapping.IamLiveVersion = "iamlive-derived/v3@" + commit
+	mapping.AuthorizationDataVersion = "iamlive-catalog/v3@" + commit + "+" + contentHash
 
 	event := decisionEvent("run-provenance", "event-provenance", nil, decoded, mapping, policy.Decision{
 		Result: policy.DecisionAllow, ReasonCode: "all_requirements_allowed",
@@ -266,9 +266,9 @@ func TestMappingCacheKeyIncludesCatalogProvenance(t *testing.T) {
 	}
 	request := pipelineDecodedRequest("GetCallerIdentity", "123456789012", "us-east-1", "aws")
 	endpoint := pipelineTestEndpoint()
-	server := &Server{config: Config{MapperVersion: "kordn-iammap/v3", AdapterVersion: "iamlive-derived/v2@pin", DataVersion: "iamlive-catalog/v2@pin+sha256:old"}, caches: caches}
+	server := &Server{config: Config{MapperVersion: "kordn-iammap/v4", AdapterVersion: "iamlive-derived/v3@pin", DataVersion: "iamlive-catalog/v3@pin+sha256:old"}, caches: caches}
 	base := server.mappingCacheKey("run", endpoint, request)
-	server.config.DataVersion = "iamlive-catalog/v2@pin+sha256:new"
+	server.config.DataVersion = "iamlive-catalog/v3@pin+sha256:new"
 	if got := server.mappingCacheKey("run", endpoint, request); got == base {
 		t.Fatal("catalog content version did not change mapping cache key")
 	}

@@ -11,8 +11,6 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
-
-	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
 type DecodeLimits struct {
@@ -439,14 +437,13 @@ func validateModeledWireRoute(c *wireIndex, service string, protocol AWSProtocol
 	candidates := indexRouteCandidates(c, service, protocol, path, method)
 	matches := 0
 	for _, candidate := range candidates {
-		o := candidate.operation
-		if !validEvidenceService(service) || !validEvidenceOperation(o.Name) || o.Route.Method == "" || o.Route.URI == "" {
+		if !validEvidenceService(service) || !validEvidenceOperation(candidate.name) || candidate.method == "" || !candidate.routeValid {
 			return errors.New("wire route model is malformed")
 		}
-		if !strings.EqualFold(o.Route.Method, method) {
+		if !strings.EqualFold(candidate.method, method) {
 			continue
 		}
-		if selectedName != "" && o.Name != selectedName {
+		if selectedName != "" && candidate.name != selectedName {
 			continue
 		}
 		if selectedPrefix != "" && candidate.targetPrefix != selectedPrefix {
@@ -587,7 +584,7 @@ func operationHasVariantTarget(c *wireIndex, service, operation, protocol, targe
 	if c == nil {
 		return false
 	}
-	return len(c.variants[jsonVariantKey{service, protocol, operation, target}]) > 0
+	return c.variants[jsonVariantKey{service, protocol, operation, target}] > 0
 }
 
 func targetOperation(target, service string, max int) (string, error) {
@@ -612,7 +609,7 @@ func targetOperationFor(target, service string, protocol AWSProtocol, c *wireInd
 	if len(p) != 2 || p[0] == "" || p[1] == "" || !validOperation(p[1]) {
 		return "", errors.New("JSON target is malformed")
 	}
-	var candidates []wireCandidate
+	var candidates []*wireCandidate
 	if protocol == "" {
 		candidates = append(candidates, c.json[jsonIndexKey{service, string(ProtocolJSON10), p[0], p[1]}]...)
 		candidates = append(candidates, c.json[jsonIndexKey{service, string(ProtocolJSON11), p[0], p[1]}]...)
@@ -626,10 +623,10 @@ func targetOperationFor(target, service string, protocol AWSProtocol, c *wireInd
 	// Variant evidence is looked up by its complete key as a bounded ownership
 	// check. It never turns a record with a mismatched own target into an owner.
 	variantKey := jsonVariantKey{service, string(candidate.protocol), p[1], p[0]}
-	if len(c.variants[variantKey]) > 1 || candidate.operation.Route.TargetPrefix != p[0] {
+	if c.variants[variantKey] > 1 || candidate.routeTarget != p[0] {
 		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
 	}
-	if candidate.operation.State != iamlivecatalog.EvidenceKnown {
+	if !candidate.known {
 		return "", errors.New("JSON operation is absent, contradictory, or ambiguous")
 	}
 	return p[1], nil

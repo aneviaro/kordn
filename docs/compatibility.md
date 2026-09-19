@@ -42,8 +42,10 @@ structural and allocation tests are deterministic hard gates.
 On the documented current Darwin amd64 reference machine run
 `KORDN_STRICT_PERFORMANCE=1 make strict-performance` and
 `KORDN_STRICT_PERFORMANCE=1 make strict-compatibility`. These strict checks
-record actual throughput, p50/p95/p99, RSS, and resource counters. Shared-runner
-numbers are not performance guarantees.
+record actual throughput, p50/p95/p99, RSS, and resource counters. Their existing
+contract files remain unchanged: ordinary RSS must be at most 80 MiB and
+compatibility RSS at most 150 MiB, in addition to the existing latency and
+throughput limits. Shared-runner numbers are not performance guarantees.
 
 ## Explicit non-containment limitations
 
