@@ -9,7 +9,7 @@ const UpstreamCommit = "3ec1a40e560c2f00ec82c50223add810e2567efb"
 
 // CatalogSchemaVersion identifies Kordn's parser/index contract. It changes
 // when the neutral catalog representation or validation semantics change.
-const CatalogSchemaVersion = "iamlive-catalog-schema/v2"
+const CatalogSchemaVersion = "iamlive-catalog-schema/v3"
 
 // EvidenceState makes absent and contradictory upstream evidence observable to
 // consumers instead of silently manufacturing a wildcard or a default.
@@ -137,6 +137,8 @@ type indexedOperation struct {
 
 type compactStore struct {
 	strings          []string
+	stringBlob       string
+	stringOffsets    []uint32
 	stringIndex      map[string]stringID
 	services         []compactService
 	operations       []compactOperation
@@ -156,7 +158,7 @@ type compactStore struct {
 	mapPairs         []compactMapPair
 	queryRecords     []compactQuery
 	refs             []stringID
-	compactPlans     map[occurrenceID]compactPlan
+	compactPlans     []compactPlan
 }
 
 type compactService struct {
@@ -244,10 +246,8 @@ type compactStaticMapping struct {
 	dependent       bool
 }
 type compactPlan struct {
-	service, operation stringID
-	occurrence         occurrenceID
-	mappings           []compactStaticMapping
-	diagnostics        []ValidationDiagnostic
+	mappings    []compactStaticMapping
+	diagnostics []ValidationDiagnostic
 }
 
 type Service struct {

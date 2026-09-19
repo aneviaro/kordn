@@ -93,25 +93,24 @@ func restOperationFromCatalog(service, path, method string, q url.Values, protoc
 	var operation string
 	var params map[string]Value
 	for _, candidate := range candidates {
-		o := candidate.operation
-		if !validEvidenceService(service) || !validEvidenceOperation(o.Name) || o.Route.Method == "" || o.Route.URI == "" {
+		if !validEvidenceService(service) || !validEvidenceOperation(candidate.name) || candidate.method == "" || !candidate.routeValid {
 			return "", nil, errors.New("REST catalog route is malformed")
 		}
-		if !strings.EqualFold(o.Route.Method, method) {
+		if !strings.EqualFold(candidate.method, method) {
 			continue
 		}
 		candidateParams, ok, matchErr := matchRESTURI(candidate.routePath, path, q, l)
 		if matchErr != nil {
 			return "", nil, matchErr
 		}
-		if !ok || !wireQueryValuesMatch(candidate.fixedQuery, q) || !matchRESTQueryBindingsFixed(candidate.fixedQuery, o.QueryBindings, q, l) {
+		if !ok || !wireQueryValuesMatch(candidate.fixedQuery, q) || !matchRESTQueryBindingsFixed(candidate.fixedQuery, candidate.queryBindings, q, l) {
 			continue
 		}
 		matches++
-		if o.State != iamlivecatalog.EvidenceKnown {
+		if !candidate.known {
 			return "", nil, errors.New("REST operation is contradictory or unsupported")
 		}
-		operation, params = o.Name, candidateParams
+		operation, params = candidate.name, candidateParams
 	}
 	if matches == 0 {
 		return "", nil, errors.New("unknown REST operation")

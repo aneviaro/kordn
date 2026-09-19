@@ -44,8 +44,12 @@ revision and must preserve `third_party/iamlive/LICENSE` and
 will retain its own source and version.
 
 The adapter exposes mapper/data versions, with the catalog commit and
-selected-content hash included in the data version. It converts incomplete extraction to
-`unresolved` rather than `*`, and contains panics/timeouts. A golden regression
+selected-content hash included in the data version. The ignored compressed bundle
+is reproducible packaging of the same pinned evidence, not a second source. The
+neutral loader streams bounded entries into occurrence-preserving compact indexes,
+packs interned strings after construction, and publishes immutable prevalidated
+plans. It converts incomplete extraction to `unresolved` rather than `*`, and
+contains panics/timeouts. A golden regression
 suite will compare representative exact/set/known-global/unresolved mappings.
 Any update that turns unresolved scope or a dependent action into an allowable
 wildcard is a release-blocking widening change and requires an ADR/test review.

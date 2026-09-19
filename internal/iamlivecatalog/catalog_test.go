@@ -564,6 +564,15 @@ func TestCatalogRetainsOnlyCompactCanonicalStore(t *testing.T) {
 	if c.services != nil || c.mappingStore != nil || c.buildActions != nil {
 		t.Fatal("full parser views remain retained after publication")
 	}
+	if c.store.operationIndex != nil || c.store.stringIndex != nil || c.store.strings != nil {
+		t.Fatal("build-only indexes or unpacked strings remain retained after publication")
+	}
+	if len(c.store.stringBlob) == 0 || len(c.store.stringOffsets) != compactStringCount(c.store)+1 {
+		t.Fatal("packed string representation is incomplete")
+	}
+	if c.SchemaVersion() != "iamlive-catalog-schema/v3" || c.Version() != "iamlive-catalog/v3@"+UpstreamCommit || c.SourceHash() != expectedSourceHash {
+		t.Fatalf("catalog identity mismatch: schema=%q version=%q source=%q", c.SchemaVersion(), c.Version(), c.SourceHash())
+	}
 }
 
 func TestCatalogSelectorsRejectEveryCompactIDAndSpanKind(t *testing.T) {
@@ -617,12 +626,12 @@ func TestCatalogSelectorsRejectEveryCompactIDAndSpanKind(t *testing.T) {
 		ok   func(*Catalog) bool
 	}{
 		{"operation occurrence", func(s *compactStore) { s.operations[operation].occurrence = 0 }, func(p *Catalog) bool { return p.Operations() == nil }},
-		{"route ID", func(s *compactStore) { s.operations[operation].route.method = stringID(len(s.strings)) }, func(p *Catalog) bool { return p.Operations() == nil }},
+		{"route ID", func(s *compactStore) { s.operations[operation].route.method = stringID(compactStringCount(s)) }, func(p *Catalog) bool { return p.Operations() == nil }},
 		{"query span", func(s *compactStore) {
 			s.operations[operation].queries = stringSpan{start: uint32(len(s.queryRecords)), count: 1}
 		}, func(p *Catalog) bool { return p.Operations() == nil }},
 		{"query ID", func(s *compactStore) {
-			s.queryRecords[s.operations[operation].queries.start].member = stringID(len(s.strings))
+			s.queryRecords[s.operations[operation].queries.start].member = stringID(compactStringCount(s))
 		}, func(p *Catalog) bool { return p.Operations() == nil }},
 		{"mapping occurrence", func(s *compactStore) { s.mappings[mapping].occurrence = 0 }, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
 		{"mapping resource span", func(s *compactStore) {
@@ -632,13 +641,13 @@ func TestCatalogSelectorsRejectEveryCompactIDAndSpanKind(t *testing.T) {
 			s.mappingResources[s.mappings[mappingWithResource].resources.start].occurrence = 0
 		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
 		{"condition ID", func(s *compactStore) {
-			s.conditions[s.mappings[mappingWithCondition].condition].lhs = stringID(len(s.strings))
+			s.conditions[s.mappings[mappingWithCondition].condition].lhs = stringID(compactStringCount(s))
 		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
 		{"condition resource index", func(s *compactStore) {
 			s.mapPairs[s.mappings[mappingWithConditionPair].conditionMappings.start].resource = -1
 		}, func(p *Catalog) bool { return p.AllMappingOccurrences() == nil }},
 		{"action occurrence", func(s *compactStore) { s.actionOrder[0].occurrence = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
-		{"action ID", func(s *compactStore) { s.actions[action].service = stringID(len(s.strings)) }, func(p *Catalog) bool { return p.Actions() == nil }},
+		{"action ID", func(s *compactStore) { s.actions[action].service = stringID(compactStringCount(s)) }, func(p *Catalog) bool { return p.Actions() == nil }},
 		{"resource span", func(s *compactStore) {
 			s.actions[action].resources = stringSpan{start: uint32(len(s.resources)), count: 1}
 		}, func(p *Catalog) bool { return p.Actions() == nil }},
@@ -649,7 +658,7 @@ func TestCatalogSelectorsRejectEveryCompactIDAndSpanKind(t *testing.T) {
 		{"dependency occurrence", func(s *compactStore) { s.resources[dependencyResource].dependentIDs[0] = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
 		{"dependency record ID", func(s *compactStore) { s.dependents[s.resources[dependencyResource].dependents.start].occurrence = 0 }, func(p *Catalog) bool { return p.Actions() == nil }},
 		{"dependency action ID", func(s *compactStore) {
-			s.dependents[s.resources[dependencyResource].dependents.start].action = stringID(len(s.strings))
+			s.dependents[s.resources[dependencyResource].dependents.start].action = stringID(compactStringCount(s))
 		}, func(p *Catalog) bool { return p.Actions() == nil }},
 	}
 	for _, tc := range cases {
@@ -668,7 +677,7 @@ func TestCatalogCanonicalOccurrencesAreInternedOrderedAndDistinct(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.store == nil || len(c.store.strings) < 2 {
+	if c.store == nil || compactStringCount(c.store) < 2 {
 		t.Fatal("canonical string store is empty")
 	}
 	// Equal source values in distinct operation records must point at one
@@ -677,17 +686,18 @@ func TestCatalogCanonicalOccurrencesAreInternedOrderedAndDistinct(t *testing.T) 
 	var repeatedValue string
 	seenOperations := map[stringID]occurrenceID{}
 	for _, operation := range c.store.operations {
-		if operation.service == invalidStringID || operation.service >= stringID(len(c.store.strings)) {
+		if operation.service == invalidStringID || operation.service >= stringID(compactStringCount(c.store)) {
 			continue
 		}
 		if prior, ok := seenOperations[operation.service]; ok && prior != operation.occurrence {
 			repeated = operation.service
-			repeatedValue = c.store.strings[repeated]
+			repeatedValue, _ = compactString(c.store, repeated)
 			break
 		}
 		seenOperations[operation.service] = operation.occurrence
 	}
-	if repeated == invalidStringID || repeatedValue == "" || c.store.strings[repeated] != repeatedValue {
+	retainedValue, _ := compactString(c.store, repeated)
+	if repeated == invalidStringID || repeatedValue == "" || retainedValue != repeatedValue {
 		t.Fatalf("repeated operation source value was not actually interned: id=%d value=%q", repeated, repeatedValue)
 	}
 
@@ -1000,7 +1010,7 @@ func TestCatalogSelectorsRejectOverflowAndExactEndForEveryNestedSpan(t *testing.
 		set   func(*compactStore)
 		valid func(*Catalog) bool
 	}
-	invalidID := func(s *compactStore) stringID { return stringID(len(s.strings)) }
+	invalidID := func(s *compactStore) stringID { return stringID(compactStringCount(s)) }
 	idCases := []idCase{
 		{"route method ID", func(s *compactStore) { s.operations[operation].route.method = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
 		{"route URI ID", func(s *compactStore) { s.operations[operation].route.uri = invalidID(s) }, func(p *Catalog) bool { return p.OperationOccurrences(opService, opName) == nil }},
@@ -1107,23 +1117,57 @@ func TestCatalogIndexesEveryAPIOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if c.store.operationIndex != nil {
+		t.Fatal("alias-expanded build index retained after publication")
+	}
 	count := 0
-	for _, service := range c.Services() {
-		for _, operation := range service.Operations {
+	for serviceIndex, positions := range c.store.serviceOps {
+		if serviceIndex >= len(c.store.services) {
+			t.Fatalf("service operation index %d has no service", serviceIndex)
+		}
+		for _, position := range positions {
 			count++
-			indexes := c.store.operationIndex[operationKey(service.EndpointPrefix, operation.Name)]
-			found := false
-			for _, position := range indexes {
-				if position.operation >= 0 && position.operation < len(c.store.operations) && c.store.operations[position.operation].occurrence == position.occurrence {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("unindexed %s/%s", service.EndpointPrefix, operation.Name)
+			if position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				t.Fatalf("service operation position %+v is corrupt", position)
 			}
 		}
 	}
 	if count != len(c.store.operations) {
 		t.Fatalf("operation count %d/%d", count, len(c.store.operations))
+	}
+}
+
+var benchmarkLoadedCatalog *Catalog
+
+func BenchmarkCatalogLoad(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		catalog, err := parse()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if catalog.SourceHash() != expectedSourceHash {
+			b.Fatalf("source hash = %q", catalog.SourceHash())
+		}
+		benchmarkLoadedCatalog = catalog
+	}
+	if benchmarkLoadedCatalog != nil {
+		b.ReportMetric(float64(len(benchmarkLoadedCatalog.store.operations)), "operations")
+		b.ReportMetric(float64(len(benchmarkLoadedCatalog.store.stringBlob)+4*len(benchmarkLoadedCatalog.store.stringOffsets)), "packed-string-B")
+	}
+}
+
+func BenchmarkCatalogCompiledLookup(b *testing.B) {
+	catalog, err := Load()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(len(catalog.store.operations)), "occurrences")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if len(catalog.OperationOccurrences("sts", "GetCallerIdentity")) != 1 {
+			b.Fatal("catalog lookup changed")
+		}
 	}
 }

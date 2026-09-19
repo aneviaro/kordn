@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	SnapshotVersion = "iamlive-catalog/v1@" + iamlivecatalog.UpstreamCommit
+	SnapshotVersion = "iamlive-catalog/v3@" + iamlivecatalog.UpstreamCommit
 	SnapshotSource  = "github.com/iann0036/iamlive/iamlivecore/{map.json,iam_definition.json,apis/**}"
 	SnapshotDate    = "pinned"
 )

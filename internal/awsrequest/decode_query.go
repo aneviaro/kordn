@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/kordn-ai/kordn/internal/iamlivecatalog"
 )
 
 func parseQueryString(raw string, l DecodeLimits) (url.Values, error) {
@@ -124,5 +122,5 @@ func catalogQueryOperation(c *wireIndex, service, version string, protocol AWSPr
 		return false
 	}
 	candidates := c.query[queryIndexKey{service, string(protocol), version, action}]
-	return len(candidates) == 1 && candidates[0].operation.State == iamlivecatalog.EvidenceKnown
+	return len(candidates) == 1 && candidates[0].known
 }

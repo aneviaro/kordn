@@ -6,8 +6,10 @@ A source checkout must include the pinned sparse iamlive submodule. Clone with
 `--recurse-submodules` and run `make iamlive-init`, or run that target after a
 non-recursive clone. It is the only network-capable preparation step; use
 `GOPROXY=off GOSUMDB=off make iamlive-check` to verify the pin and catalog
-offline. GitHub source archives and plain `go install` are unsupported; a
-published binary is standalone.
+offline. Initialization also reproduces the ignored deterministic catalog bundle
+from the exact selected submodule bytes; it does not download a separate
+authorization database. GitHub source archives and plain `go install` are
+unsupported; a published binary is standalone.
 
 Use an isolated home for a smoke test or a dedicated real home for normal use:
 

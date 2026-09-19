@@ -16,8 +16,8 @@ Only these upstream paths are selected and embedded:
   catalog source digest; the selected set is checked by the sparse-checkout
   initializer.
 
-The Kordn catalog schema is `iamlive-catalog-schema/v2`, and its catalog data
-version is `iamlive-catalog/v2@3ec1a40e560c2f00ec82c50223add810e2567efb` plus the
+The Kordn catalog schema is `iamlive-catalog-schema/v3`, and its catalog data
+version is `iamlive-catalog/v3@3ec1a40e560c2f00ec82c50223add810e2567efb` plus the
 selected-content SHA-256 calculated at load time. `kordn version --json` exposes
 these values separately as `upstream_commit`, `selected_content_sha256`,
 `catalog_schema`, and `catalog_version`.
@@ -32,6 +32,13 @@ definitions; the pinned files contain 225 missing and 2 contradictory mapping
 agreements, plus 3 explicit permissionless operations and 30 undocumented IAM
 definitions. Its digest is deterministic over the four core files, notices, and
 every selected API path and byte sequence.
+
+The ignored `internal/iamlivecatalog/catalog.bundle.gz` file is deterministic
+packaging of exactly those selected, hashed bytes. It is reproduced by the
+initializer with fixed archive metadata and verified byte-for-byte by
+`./scripts/init-iamlive-submodule.sh --check`; it is not an independent
+authorization source. The loader streams bounded archive entries into immutable
+compact records and prevalidated plans without performing network I/O.
 
 No iamlive runtime, proxy, credential, HTTP, or authorization enforcement code is
 copied. Kordn's authorization and fail-closed enforcement remain outside this

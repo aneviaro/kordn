@@ -173,7 +173,8 @@ benchmark: iamlive-check
 # target: these names are the local regression surface for catalog work.
 benchmark-hotpath: iamlive-check
 	$(GO) test -run '^$$' -bench='^(BenchmarkDecodeQuery|BenchmarkDecodeJSON|BenchmarkWireIndexLookupQueryExact|BenchmarkWireIndexLookupQueryNegative|BenchmarkWireIndexLookupQueryAmbiguous|BenchmarkWireIndexLookupJSONExact|BenchmarkWireIndexLookupJSONAmbiguous)$$' -benchmem ./internal/awsrequest
-	$(GO) test -run '^$$' -bench='^BenchmarkLookupRequest$$' -benchmem ./internal/iammap
+	$(GO) test -run '^$$' -bench='^(BenchmarkLookupRequest|BenchmarkCatalogResidentLookup|BenchmarkMapping|BenchmarkStagedMapping)$$' -benchmem ./internal/iammap
+	$(GO) test -run '^$$' -bench='^(BenchmarkCatalogLoad|BenchmarkCatalogCompiledLookup)$$' -benchmem ./internal/iamlivecatalog
 
 # Exercise every checked-in fuzz target briefly without downloading a corpus.
 # Fuzzing is deterministic and offline when the module cache is already
@@ -232,7 +233,7 @@ release-snapshot:
 	$(GO) version -m "dist/release-snapshot/$$name" > dist/release-snapshot/BUILD-INFO.txt; \
 	printf '%s' '{"format":"kordn.release.sbom/v1","generator":"go list -m","dependencies":[' > dist/release-snapshot/sbom.json; \
 	$(GO) list -m -f '{"path":"{{.Path}}","version":"{{.Version}}"}' all | awk 'NR > 1 { printf "," } { printf "%s", $$0 } END { print "]}" }' >> dist/release-snapshot/sbom.json; \
-	printf '%s\n' '{"format":"kordn.provenance/v1","build":"offline-reproducible","upstream_commit":"3ec1a40e560c2f00ec82c50223add810e2567efb","selected_content_sha256":"43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869","catalog_schema":"iamlive-catalog-schema/v2","catalog_version":"iamlive-catalog/v2@3ec1a40e560c2f00ec82c50223add810e2567efb","mapper":"kordn-iammap/v3","adapter":"iamlive-derived/v2@3ec1a40e560c2f00ec82c50223add810e2567efb","authorization_data":"iamlive-catalog/v2@3ec1a40e560c2f00ec82c50223add810e2567efb+sha256:43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869","targets":["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64"]}' > dist/release-snapshot/provenance.json; \
+	printf '%s\n' '{"format":"kordn.provenance/v1","build":"offline-reproducible","upstream_commit":"3ec1a40e560c2f00ec82c50223add810e2567efb","selected_content_sha256":"43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869","catalog_schema":"iamlive-catalog-schema/v3","catalog_version":"iamlive-catalog/v3@3ec1a40e560c2f00ec82c50223add810e2567efb","mapper":"kordn-iammap/v4","adapter":"iamlive-derived/v3@3ec1a40e560c2f00ec82c50223add810e2567efb","authorization_data":"iamlive-catalog/v3@3ec1a40e560c2f00ec82c50223add810e2567efb+sha256:43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869","targets":["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64"]}' > dist/release-snapshot/provenance.json; \
 	printf '%s\n' 'MIT-licensed project; reviewed third-party licenses and attributions are included in release archives.' > dist/release-snapshot/LICENSE-REPORT.txt; \
 	( cd dist/release-snapshot && if command -v sha256sum >/dev/null 2>&1; then sha256sum kordn-* BUILD-INFO.txt LICENSE-REPORT.txt provenance.json sbom.json version.json > SHA256SUMS && sha256sum -c SHA256SUMS; else shasum -a 256 kordn-* BUILD-INFO.txt LICENSE-REPORT.txt provenance.json sbom.json version.json > SHA256SUMS && shasum -a 256 -c SHA256SUMS; fi ); \
 	for file in dist/release-snapshot/kordn-* dist/release-snapshot/SHA256SUMS dist/release-snapshot/BUILD-INFO.txt dist/release-snapshot/LICENSE-REPORT.txt dist/release-snapshot/sbom.json dist/release-snapshot/provenance.json dist/release-snapshot/version.json; do test -s "$$file"; done; \

@@ -14,11 +14,11 @@ import (
 // Every slice is built before publication and is never modified afterwards.
 type wireIndex struct {
 	authority map[string][]protocolEvidence
-	query     map[queryIndexKey][]wireCandidate
-	json      map[jsonIndexKey][]wireCandidate
-	variants  map[jsonVariantKey][]wireCandidate
-	rest      map[restIndexKey][]wireCandidate
-	modeled   map[modeledIndexKey][]wireCandidate
+	query     map[queryIndexKey][]*wireCandidate
+	json      map[jsonIndexKey][]*wireCandidate
+	variants  map[jsonVariantKey]uint32
+	rest      map[restIndexKey][]*wireCandidate
+	modeled   map[modeledIndexKey][]*wireCandidate
 }
 
 type protocolEvidence struct {
@@ -33,13 +33,13 @@ type restIndexKey struct{ service, protocol, method, path string }
 type modeledIndexKey struct{ service, protocol, path, method string }
 
 type wireCandidate struct {
-	service      string
-	apiVersion   string
-	targetPrefix string
-	protocol     AWSProtocol
-	operation    iamlivecatalog.WireOperation
-	fixedQuery   url.Values
-	routePath    string
+	name, apiVersion, targetPrefix string
+	protocol                       AWSProtocol
+	method, routeTarget            string
+	queryBindings                  []iamlivecatalog.QueryBinding
+	fixedQuery                     url.Values
+	routePath                      string
+	known, routeValid              bool
 }
 
 // wireSnapshot is retained only as a source-compatible test seam. Production
@@ -56,9 +56,9 @@ func buildWireIndex(source interface{}) (*wireIndex, error) {
 		return nil, errors.New("wire catalog is unavailable")
 	}
 	idx := &wireIndex{
-		authority: make(map[string][]protocolEvidence), query: make(map[queryIndexKey][]wireCandidate),
-		json: make(map[jsonIndexKey][]wireCandidate), variants: make(map[jsonVariantKey][]wireCandidate),
-		rest: make(map[restIndexKey][]wireCandidate), modeled: make(map[modeledIndexKey][]wireCandidate),
+		authority: make(map[string][]protocolEvidence), query: make(map[queryIndexKey][]*wireCandidate),
+		json: make(map[jsonIndexKey][]*wireCandidate), variants: make(map[jsonVariantKey]uint32),
+		rest: make(map[restIndexKey][]*wireCandidate), modeled: make(map[modeledIndexKey][]*wireCandidate),
 	}
 	authorityModels := map[string]bool{}
 	visit := func(service iamlivecatalog.WireService, original iamlivecatalog.WireOperation) error {
@@ -76,15 +76,19 @@ func buildWireIndex(source interface{}) (*wireIndex, error) {
 		if !protocolOK {
 			return nil
 		} // authority retains negative evidence
-		operation := original
-		operation.QueryBindings = append([]iamlivecatalog.QueryBinding(nil), original.QueryBindings...)
-		candidate := wireCandidate{service: service.EndpointPrefix, apiVersion: service.APIVersion, targetPrefix: service.TargetPrefix, protocol: protocol, operation: operation, fixedQuery: cloneURLValues(fixed), routePath: routePath}
+		candidate := &wireCandidate{
+			name: original.Name, apiVersion: service.APIVersion, targetPrefix: service.TargetPrefix,
+			protocol: protocol, known: original.State == iamlivecatalog.EvidenceKnown,
+			method: original.Route.Method, routeValid: original.Route.URI != "", routeTarget: original.Route.TargetPrefix,
+			queryBindings: append([]iamlivecatalog.QueryBinding(nil), original.QueryBindings...),
+			fixedQuery:    cloneURLValues(fixed), routePath: routePath,
+		}
 		if protocol == ProtocolJSON10 || protocol == ProtocolJSON11 {
 			key := jsonIndexKey{service.EndpointPrefix, string(protocol), service.TargetPrefix, original.Name}
 			idx.json[key] = append(idx.json[key], candidate)
 			if original.Route.TargetPrefix != "" {
 				vkey := jsonVariantKey{service.EndpointPrefix, string(protocol), original.Name, original.Route.TargetPrefix}
-				idx.variants[vkey] = append(idx.variants[vkey], candidate)
+				idx.variants[vkey]++
 			}
 		}
 		switch protocol {
@@ -128,6 +132,9 @@ func indexRouteQuery(uri string) (url.Values, string, bool) {
 }
 
 func cloneURLValues(in url.Values) url.Values {
+	if len(in) == 0 {
+		return nil
+	}
 	out := make(url.Values, len(in))
 	for key, values := range in {
 		out[key] = append([]string(nil), values...)
@@ -163,7 +170,7 @@ func defaultWireIndexOrNil() *wireIndex {
 
 func defaultWireCatalog() *wireIndex { return defaultWireIndexOrNil() }
 
-func indexRouteCandidates(idx *wireIndex, service string, protocol AWSProtocol, path, method string) []wireCandidate {
+func indexRouteCandidates(idx *wireIndex, service string, protocol AWSProtocol, path, method string) []*wireCandidate {
 	if idx == nil {
 		return nil
 	}

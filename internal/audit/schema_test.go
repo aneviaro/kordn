@@ -52,9 +52,9 @@ func TestAuditSchemaCompilesAndValidatesEveryEventType(t *testing.T) {
 	decision.IAMRequirements = []Requirement{{Action: "sts:GetCallerIdentity", Resources: []string{"[REDACTED]"}, ScopeKind: awsrequest.ScopeExact}}
 	decision.Mapping = &MappingInfo{
 		Confidence:               awsrequest.ConfidenceHigh,
-		MapperVersion:            "kordn-iammap/v3",
-		IamLiveVersion:           "iamlive-derived/v2@3ec1a40e560c2f00ec82c50223add810e2567efb",
-		AuthorizationDataVersion: "iamlive-catalog/v1@3ec1a40e560c2f00ec82c50223add810e2567efb+sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		MapperVersion:            "kordn-iammap/v4",
+		IamLiveVersion:           "iamlive-derived/v3@3ec1a40e560c2f00ec82c50223add810e2567efb",
+		AuthorizationDataVersion: "iamlive-catalog/v3@3ec1a40e560c2f00ec82c50223add810e2567efb+sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
 	decision.Decision = &DecisionInfo{Result: "allow", ReasonCode: "all_requirements_allowed", MatchedRuleIDs: []string{}, PolicyHash: "sha256:" + strings.Repeat("b", 64)}
 	decision.Timing = &TimingInfo{LocalTotal: 1}

@@ -19,7 +19,7 @@ import (
 
 // CatalogVersion identifies the parsed catalog implementation and upstream
 // gitlink revision. The selected-content digest is exposed by Catalog.SourceHash.
-const CatalogVersion = "iamlive-catalog/v2@" + UpstreamCommit
+const CatalogVersion = "iamlive-catalog/v3@" + UpstreamCommit
 const catalogVersion = CatalogVersion
 const expectedSourceHash = "43e605716ea0ccdaeb625bad52088deece0204ad38e4b6e461e6792a1dd00869"
 const maxJSONBytes = 64 << 20
@@ -63,8 +63,24 @@ func (c *Catalog) SourceHash() string {
 	}
 	return c.sourceHash
 }
+func compactStringCount(s *compactStore) int {
+	if s == nil {
+		return 0
+	}
+	if len(s.stringOffsets) > 0 {
+		return len(s.stringOffsets) - 1
+	}
+	return len(s.strings)
+}
+
 func validStringID(s *compactStore, id stringID) bool {
-	return id != invalidStringID && uint64(id) < uint64(len(s.strings))
+	if id == invalidStringID || s == nil {
+		return false
+	}
+	if len(s.stringOffsets) > 0 {
+		return uint64(id)+1 < uint64(len(s.stringOffsets))
+	}
+	return uint64(id) < uint64(compactStringCount(s))
 }
 func compactString(s *compactStore, id stringID) (string, bool) {
 	if id == invalidStringID {
@@ -73,7 +89,14 @@ func compactString(s *compactStore, id stringID) (string, bool) {
 	if !validStringID(s, id) {
 		return "", false
 	}
-	return s.strings[id], true
+	if len(s.stringOffsets) == 0 {
+		return s.strings[id], true
+	}
+	start, end := s.stringOffsets[id], s.stringOffsets[id+1]
+	if start > end || uint64(end) > uint64(len(s.stringBlob)) {
+		return "", false
+	}
+	return s.stringBlob[start:end], true
 }
 func validSpan(span stringSpan, length int) bool {
 	return uint64(span.start)+uint64(span.count) <= uint64(length)
@@ -394,7 +417,7 @@ func (c *Catalog) ForEachOperationOccurrence(fn func(OperationOccurrence) error)
 			if !ok {
 				return errors.New("catalog operation canonical record is corrupt")
 			}
-			plan, ok := c.staticPlan(operation.occurrenceID)
+			plan, ok := c.staticPlan(position.operation)
 			if !ok {
 				return errors.New("catalog static plan index is corrupt")
 			}
@@ -496,7 +519,7 @@ func (c *Catalog) OperationOccurrences(service, operation string) []OperationOcc
 		if !ok {
 			return nil
 		}
-		plan, ok := c.staticPlan(view.occurrenceID)
+		plan, ok := c.staticPlan(p.operation)
 		if !ok {
 			return nil
 		}
@@ -566,15 +589,30 @@ func (c *Catalog) Operation(service, operation string) (Operation, error) {
 	if c == nil || c.store == nil {
 		return Operation{}, errors.New("catalog unavailable")
 	}
-	indexes := c.store.operationIndex[operationKey(service, operation)]
+	operation = strings.TrimSpace(operation)
+	var indexes []compactIndex
+	for _, serviceIndex := range c.storeServiceIndex(service) {
+		if serviceIndex < 0 || serviceIndex >= len(c.store.serviceOps) {
+			return Operation{}, errors.New("catalog operation index is corrupt")
+		}
+		for _, position := range c.store.serviceOps[serviceIndex] {
+			if position.occurrence == invalidOccurrenceID || position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				return Operation{}, errors.New("catalog operation index is corrupt")
+			}
+			name, ok := compactString(c.store, c.store.operations[position.operation].name)
+			if !ok {
+				return Operation{}, errors.New("catalog operation index is corrupt")
+			}
+			if strings.EqualFold(name, operation) {
+				indexes = append(indexes, compactIndex{operation: position.operation, occurrence: position.occurrence})
+			}
+		}
+	}
 	if len(indexes) != 1 {
 		if len(indexes) == 0 {
 			return Operation{}, fmt.Errorf("unknown operation %s:%s", service, operation)
 		}
 		return Operation{}, fmt.Errorf("ambiguous operation %s:%s", service, operation)
-	}
-	if indexes[0].occurrence == invalidOccurrenceID || indexes[0].operation < 0 || indexes[0].operation >= len(c.store.operations) || c.store.operations[indexes[0].operation].occurrence != indexes[0].occurrence {
-		return Operation{}, errors.New("catalog operation index is corrupt")
 	}
 	view, ok := c.compactView(indexes[0].operation)
 	if !ok {
@@ -702,7 +740,7 @@ func (c *Catalog) InternedStringCardinality() int {
 	if c == nil || c.store == nil {
 		return 0
 	}
-	return len(c.store.strings) - 1
+	return compactStringCount(c.store) - 1
 }
 func (c *Catalog) MappingOccurrenceCardinality() int {
 	if c == nil || c.store == nil {
@@ -923,31 +961,37 @@ func (c *Catalog) ForEachDependentActionOccurrence(fn func(string) error) error 
 // parse is intentionally kept separate from the package-level cache so tests
 // can exercise construction through the immutable public API.
 func parse() (*Catalog, error) {
-	var licenseBytes, noticeBytes, mapBytes, defBytes []byte
 	cat := &Catalog{version: catalogVersion, serviceIndex: map[string][]int{}, operations: map[string][]indexedOperation{}, buildActions: map[string][]ActionDefinition{}, mappingIndex: map[string][]mappingSpan{}, permissionless: map[string]bool{}, strings: []string{""}, stringIndex: map[string]stringID{}}
 	h := sha256.New()
-	err := readBundle(func(name string, data []byte) error {
-		// The archive names are the canonical source paths. API entries retain
-		// the historical embedded prefix in SourceHash for compatibility.
-		var hashName string
+	licenseFound, noticeFound := false, false
+	err := readBundleStreamData(embeddedBundle, func(name string, size int64, reader io.Reader) error {
+		// Hash every selected source byte while retaining only the API entry
+		// currently being decoded. Large fixed catalog entries are revisited as
+		// streams after the API graph has been compacted.
+		hashName := name
+		if strings.HasPrefix(name, "iamlivecore/apis/") {
+			hashName = "upstream/" + name
+		}
+		h.Write([]byte(hashName))
+		h.Write([]byte{0})
+		hashed := io.TeeReader(reader, h)
 		switch name {
 		case "LICENSE":
-			licenseBytes = data
-			hashName = name
+			licenseFound = size > 0
+			_, err := io.Copy(io.Discard, hashed)
+			return err
 		case "NOTICE":
-			noticeBytes = data
-			hashName = name
-		case "iamlivecore/map.json":
-			mapBytes = data
-			hashName = name
-		case "iamlivecore/iam_definition.json":
-			defBytes = data
-			hashName = name
+			noticeFound = size > 0
+			_, err := io.Copy(io.Discard, hashed)
+			return err
+		case "iamlivecore/map.json", "iamlivecore/iam_definition.json":
+			_, err := io.Copy(io.Discard, hashed)
+			return err
 		default:
-			if !strings.HasPrefix(name, "iamlivecore/apis/") {
-				return fmt.Errorf("bundle: unexpected entry %q", name)
+			data := make([]byte, size)
+			if _, err := io.ReadFull(hashed, data); err != nil {
+				return fmt.Errorf("bundle entry %q is truncated: %w", name, err)
 			}
-			hashName = "upstream/" + name
 			a, err := decodeAPI("upstream/"+name, data)
 			if err != nil {
 				return err
@@ -955,54 +999,144 @@ func parse() (*Catalog, error) {
 			if err := cat.addAPI("upstream/"+name, a); err != nil {
 				return err
 			}
+			if err := cat.compactEvidence(); err != nil {
+				return err
+			}
+			cat.strings = cat.store.strings
+			cat.stringIndex = cat.store.stringIndex
+			cat.serviceIndex = make(map[string][]int)
+			cat.operations = make(map[string][]indexedOperation)
+			return nil
 		}
-		h.Write([]byte(hashName))
-		h.Write([]byte{0})
-		h.Write(data)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !licenseFound || !noticeFound {
+		return nil, errors.New("bundle: license or notice is empty")
+	}
+	// Compact API evidence before decoding definitions and mappings. Keeping the
+	// complete Smithy decode graph alive through the remaining catalog phases
+	// needlessly overlaps the largest one-time allocations.
+	if err := cat.compactEvidence(); err != nil {
+		return nil, err
+	}
+	cat.strings = cat.store.strings
+	cat.stringIndex = cat.store.stringIndex
+	cat.buildActions = make(map[string][]ActionDefinition)
+	cat.mappingIndex = make(map[string][]mappingSpan)
+	cat.permissionless = make(map[string]bool)
+	// Decode definitions directly from their bounded archive entry. Reopening the
+	// deterministic embedded archive avoids retaining its 11 MiB uncompressed
+	// definition payload alongside the compact API graph.
+	definitionCount := 0
+	definitionFound := false
+	err = readBundleStreamData(embeddedBundle, func(name string, _ int64, reader io.Reader) error {
+		if name != "iamlivecore/iam_definition.json" {
+			return nil
+		}
+		definitionFound = true
+		definitions := json.NewDecoder(reader)
+		token, err := definitions.Token()
+		if err != nil || token != json.Delim('[') {
+			return fmt.Errorf("iam_definition.json: expected array: %v", err)
+		}
+		for definitions.More() {
+			var definition rawService
+			if err := definitions.Decode(&definition); err != nil {
+				return fmt.Errorf("iam_definition.json: %w", err)
+			}
+			if err := cat.addDefinition(definition); err != nil {
+				return err
+			}
+			if err := cat.compactEvidence(); err != nil {
+				return err
+			}
+			cat.strings = cat.store.strings
+			cat.stringIndex = cat.store.stringIndex
+			cat.buildActions = make(map[string][]ActionDefinition)
+			definitionCount++
+		}
+		if end, err := definitions.Token(); err != nil || end != json.Delim(']') {
+			return fmt.Errorf("iam_definition.json: malformed array: %v", err)
+		}
+		var extra json.Token
+		if err := definitions.Decode(&extra); err != io.EOF {
+			return errors.New("iam_definition.json: trailing JSON value")
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if len(licenseBytes) == 0 || len(noticeBytes) == 0 {
-		return nil, errors.New("bundle: license or notice is empty")
-	}
-	if err = validJSON(mapBytes, "map.json"); err != nil {
-		return nil, err
-	}
-	if err = validJSON(defBytes, "iam_definition.json"); err != nil {
-		return nil, err
-	}
-	var rawMap struct {
-		Schema         string                  `json:"schema_version"`
-		SDK            map[string][]rawMapping `json:"sdk_method_iam_mappings"`
-		ServiceSDK     map[string][]string     `json:"service_sdk_mappings"`
-		Permissionless []string                `json:"sdk_permissionless_actions"`
-	}
-	if err = json.Unmarshal(mapBytes, &rawMap); err != nil {
-		return nil, fmt.Errorf("map.json: %w", err)
-	}
-	if rawMap.Schema == "" {
-		return nil, errors.New("map.json: missing schema_version")
-	}
-	orderedSDK, err := orderedObjectValues(mapBytes, "sdk_method_iam_mappings")
-	if err != nil {
-		return nil, fmt.Errorf("map.json: sdk_method_iam_mappings: %w", err)
-	}
-	var rawDefs []rawService
-	if err = json.Unmarshal(defBytes, &rawDefs); err != nil {
-		return nil, fmt.Errorf("iam_definition.json: %w", err)
-	}
-	if len(rawDefs) == 0 {
+	if !definitionFound || definitionCount == 0 {
 		return nil, errors.New("iam_definition.json: empty")
+	}
+	if err := cat.compactEvidence(); err != nil {
+		return nil, err
+	}
+	cat.strings = cat.store.strings
+	cat.stringIndex = cat.store.stringIndex
+	cat.store.operationIndex = nil
+	cat.mappingIndex = make(map[string][]mappingSpan)
+	cat.permissionless = make(map[string]bool)
+	var rawMap struct {
+		Schema         string              `json:"schema_version"`
+		ServiceSDK     map[string][]string `json:"service_sdk_mappings"`
+		Permissionless []string            `json:"sdk_permissionless_actions"`
+	}
+	mapFound := false
+	err = readBundleStreamData(embeddedBundle, func(name string, _ int64, reader io.Reader) error {
+		if name != "iamlivecore/map.json" {
+			return nil
+		}
+		mapFound = true
+		decoder := json.NewDecoder(reader)
+		start, err := decoder.Token()
+		if err != nil || start != json.Delim('{') {
+			return fmt.Errorf("map.json: expected object: %v", err)
+		}
+		for decoder.More() {
+			key, err := decoder.Token()
+			if err != nil {
+				return fmt.Errorf("map.json: %w", err)
+			}
+			name, ok := key.(string)
+			if !ok {
+				return errors.New("map.json: object key is not a string")
+			}
+			switch name {
+			case "schema_version":
+				err = decoder.Decode(&rawMap.Schema)
+			case "service_sdk_mappings":
+				err = decoder.Decode(&rawMap.ServiceSDK)
+			case "sdk_permissionless_actions":
+				err = decoder.Decode(&rawMap.Permissionless)
+			default:
+				err = skipJSONValue(decoder)
+			}
+			if err != nil {
+				return fmt.Errorf("map.json %s: %w", name, err)
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return fmt.Errorf("map.json: malformed object: %v", err)
+		}
+		var extra json.Token
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return errors.New("map.json: trailing JSON value")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !mapFound || rawMap.Schema == "" {
+		return nil, errors.New("map.json: missing schema_version")
 	}
 	// API entries are decoded as they leave the archive, so no second
 	// uncompressed copy of the selected corpus is retained.
-	for _, d := range rawDefs {
-		if err = cat.addDefinition(d); err != nil {
-			return nil, err
-		}
-	}
 	// Resolve SDK aliases only after every API alias has been indexed. A mapping
 	// is evidence for an operation even when its action is absent from the SAR
 	// dataset; that disagreement remains visible through Action lookup failure.
@@ -1018,149 +1152,116 @@ func parse() (*Catalog, error) {
 			return nil, fmt.Errorf("map.json: malformed permissionless operation key %q", k)
 		}
 		services := append([]string{parts[0]}, sdkToService[strings.ToLower(parts[0])]...)
-		for _, s := range services {
-			key := operationKey(s, parts[1])
-			if len(cat.operations[key]) > 0 {
+		for _, service := range services {
+			key := operationKey(service, parts[1])
+			if cat.hasOperationKey(key) {
 				cat.permissionless[key] = true
 				break
 			}
 		}
 	}
-	for _, entry := range orderedSDK {
-		k := entry.key
-		mappingValues, err := orderedArray(entry.value)
-		if err != nil {
-			return nil, fmt.Errorf("map.json %s: %w", k, err)
+	foundMappings := false
+	err = readBundleStreamData(embeddedBundle, func(name string, _ int64, reader io.Reader) error {
+		if name != "iamlivecore/map.json" {
+			return nil
 		}
-		vals := make([]rawMapping, len(mappingValues))
-		for i, raw := range mappingValues {
-			vals[i], err = decodeRawMapping(raw)
+		return forEachObjectValueReader(reader, "sdk_method_iam_mappings", func(k string, value []byte) error {
+			foundMappings = true
+			mappingValues, err := orderedArray(value)
 			if err != nil {
-				return nil, fmt.Errorf("map.json %s[%d]: %w", k, i, err)
+				return fmt.Errorf("map.json %s: %w", k, err)
 			}
-		}
-		if len(vals) > int(maxCatalogItems) || uint64(len(cat.mappingStore))+uint64(len(vals)) > uint64(maxCatalogItems) {
-			return nil, errors.New("map.json: mapping occurrence count exceeds catalog bound")
-		}
-		start := uint32(len(cat.mappingStore))
-		for i := range vals {
-			mappingID, err := cat.nextID()
-			if err != nil {
-				return nil, err
+			if len(mappingValues) > int(maxCatalogItems) || uint64(len(cat.store.mappings))+uint64(len(cat.mappingStore))+uint64(len(mappingValues)) > uint64(maxCatalogItems) {
+				return errors.New("map.json: mapping occurrence count exceeds catalog bound")
 			}
-			m, e := convertMapping(vals[i])
-			if e != nil {
-				return nil, fmt.Errorf("map.json %s: %w", k, e)
-			}
-			m.occurrenceID = mappingID
-			if err := cat.assignMappingIDs(&m); err != nil {
-				return nil, err
-			}
-			cat.mappingStore = append(cat.mappingStore, m)
-			cat.mappingOrder = append(cat.mappingOrder, mappingPosition{storeIndex: uint32(len(cat.mappingStore) - 1), occurrence: m.occurrenceID, key: k})
-		}
-		// Resolve the normalized operation only after all raw mapping IDs have
-		// been allocated, including mappings that do not match an API model.
-		parts := strings.SplitN(k, ".", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, fmt.Errorf("map.json: malformed operation key %q", k)
-		}
-		services := append([]string{parts[0]}, sdkToService[strings.ToLower(parts[0])]...)
-		matchedKey := ""
-		for _, s := range services {
-			key := operationKey(s, parts[1])
-			if len(cat.operations[key]) > 0 {
-				matchedKey = key
-				break
-			}
-		}
-		if matchedKey != "" {
-			cat.mappingIndex[matchedKey] = append(cat.mappingIndex[matchedKey], mappingSpan{start: start, count: uint32(len(vals))})
-		}
-	}
-	// Cross-file disagreements must be evaluated only after the SDK map has
-	// populated the canonical mapping store. Missing IAM definitions remain
-	// absent evidence; contradictory definitions remain contradictory.
-	for _, spans := range cat.mappingIndex {
-		for _, span := range spans {
-			if !validMappingSpan(span, len(cat.mappingStore)) {
-				return nil, errors.New("catalog: mapping span exceeds canonical store")
-			}
-			for i := uint32(0); i < span.count; i++ {
-				mapping := &cat.mappingStore[span.start+i]
-				parts := strings.SplitN(mapping.Action, ":", 2)
-				if len(parts) != 2 {
+			start := uint32(len(cat.mappingStore))
+			for i, raw := range mappingValues {
+				value, err := decodeRawMapping(raw)
+				if err != nil {
+					return fmt.Errorf("map.json %s[%d]: %w", k, i, err)
+				}
+				mappingID, err := cat.nextID()
+				if err != nil {
+					return err
+				}
+				mapping, err := convertMapping(value)
+				if err != nil {
+					return fmt.Errorf("map.json %s: %w", k, err)
+				}
+				mapping.occurrenceID = mappingID
+				if err := cat.assignMappingIDs(&mapping); err != nil {
+					return err
+				}
+				action := strings.SplitN(mapping.Action, ":", 2)
+				if len(action) != 2 {
 					mapping.State = EvidenceContradictory
-					continue
-				}
-				defs := cat.buildActions[strings.ToLower(parts[0])+"\x00"+strings.ToLower(parts[1])]
-				switch len(defs) {
-				case 0:
-					mapping.State = EvidenceAbsent
-				case 1:
-					mapping.State = defs[0].State
-				default:
-					mapping.State = EvidenceContradictory
-				}
-			}
-		}
-	}
-	// Attach bounded slices into the canonical mapping store. Alias indexes share
-	// the span and never receive a second mapping graph.
-	for i := range cat.services {
-		for j := range cat.services[i].Operations {
-			o := &cat.services[i].Operations[j]
-			var ms []ActionMapping
-			var spansForOperation []mappingSpan
-			for _, alias := range cat.services[i].Aliases {
-				if spans, ok := cat.mappingIndex[operationKey(alias, o.Name)]; ok {
-					for _, span := range spans {
-						if !validMappingSpan(span, len(cat.mappingStore)) {
-							return nil, errors.New("catalog: mapping span exceeds canonical store")
-						}
-						spansForOperation = append(spansForOperation, span)
-						ms = append(ms, cat.mappingStore[span.start:span.start+span.count]...)
-					}
-					if len(ms) > 0 {
-						break
-					}
-				}
-			}
-			o.mappingSpans = spansForOperation
-			o.Mappings = nil
-			isPermissionless := cat.permissionless[operationKey(cat.services[i].EndpointPrefix, o.Name)]
-			if len(ms) > 0 {
-				if isPermissionless {
-					o.MappingState = EvidencePermissionless
 				} else {
-					o.MappingState = EvidenceKnown
-					allAbsent := true
-					for _, m := range ms {
-						if m.State != EvidenceAbsent {
-							allAbsent = false
+					definitions := cat.store.actionIndex[strings.ToLower(action[0])+"\x00"+strings.ToLower(action[1])]
+					switch len(definitions) {
+					case 0:
+						mapping.State = EvidenceAbsent
+					case 1:
+						definition := definitions[0]
+						if definition.action < 0 || definition.action >= len(cat.store.actions) || cat.store.actions[definition.action].occurrence != definition.occurrence {
+							return errors.New("catalog: compact action index is corrupt")
 						}
-						if m.State == EvidenceContradictory {
-							o.MappingState = EvidenceContradictory
-						}
-					}
-					if allAbsent {
-						o.MappingState = EvidenceAbsent
+						mapping.State = cat.store.actions[definition.action].state
+					default:
+						mapping.State = EvidenceContradictory
 					}
 				}
-			} else if isPermissionless {
-				o.MappingState = EvidencePermissionless
-			} else {
-				o.MappingState = EvidenceAbsent
+				cat.mappingStore = append(cat.mappingStore, mapping)
+				cat.mappingOrder = append(cat.mappingOrder, mappingPosition{storeIndex: uint32(len(cat.mappingStore) - 1), occurrence: mapping.occurrenceID, key: k})
 			}
-		}
+			// Resolve the normalized operation only after all raw mapping IDs have
+			// been allocated, including mappings that do not match an API model.
+			parts := strings.SplitN(k, ".", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return fmt.Errorf("map.json: malformed operation key %q", k)
+			}
+			services := append([]string{parts[0]}, sdkToService[strings.ToLower(parts[0])]...)
+			matchedKey := ""
+			for _, service := range services {
+				key := operationKey(service, parts[1])
+				if cat.hasOperationKey(key) {
+					matchedKey = key
+					break
+				}
+			}
+			if matchedKey != "" {
+				cat.mappingIndex[matchedKey] = append(cat.mappingIndex[matchedKey], mappingSpan{start: start, count: uint32(len(mappingValues))})
+			}
+			if len(cat.mappingStore) >= 512 {
+				if err := cat.compactEvidence(); err != nil {
+					return err
+				}
+				cat.strings = cat.store.strings
+				cat.stringIndex = cat.store.stringIndex
+				cat.mappingIndex = make(map[string][]mappingSpan)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("map.json: sdk_method_iam_mappings: %w", err)
 	}
-	if err := cat.compileStaticPlans(); err != nil {
-		return nil, err
-	}
-	if err := cat.buildOccurrenceIndex(); err != nil {
-		return nil, err
+	if !foundMappings {
+		return nil, errors.New("map.json: missing sdk_method_iam_mappings")
 	}
 	if err := cat.compactEvidence(); err != nil {
+		return nil, err
+	}
+	cat.strings = cat.store.strings
+	cat.stringIndex = cat.store.stringIndex
+	// Attach mapping spans to the already compacted API operation records.
+	if err := cat.attachCompactMappings(); err != nil {
+		return nil, err
+	}
+	cat.permissionless = nil
+	if err := cat.compactEvidence(); err != nil {
+		return nil, err
+	}
+	if err := cat.compileCompactPlans(); err != nil {
 		return nil, err
 	}
 	cat.sourceHash = hex.EncodeToString(h.Sum(nil))
@@ -1212,6 +1313,128 @@ func (c *Catalog) buildOccurrenceIndex() error {
 	return nil
 }
 
+func (c *Catalog) hasOperationKey(key string) bool {
+	if c == nil {
+		return false
+	}
+	if c.store == nil {
+		return len(c.operations[key]) > 0
+	}
+	if c.store.operationIndex != nil {
+		return len(c.store.operationIndex[key]) > 0
+	}
+	separator := strings.IndexByte(key, 0)
+	if separator <= 0 || separator == len(key)-1 {
+		return false
+	}
+	service, operation := key[:separator], key[separator+1:]
+	for serviceIndex, record := range c.store.services {
+		if serviceIndex >= len(c.store.serviceOps) || !validSpan(record.aliases, len(c.store.refs)) {
+			return false
+		}
+		matchesService := false
+		for offset := uint32(0); offset < record.aliases.count; offset++ {
+			alias, ok := compactString(c.store, c.store.refs[record.aliases.start+offset])
+			if !ok {
+				return false
+			}
+			if strings.EqualFold(alias, service) {
+				matchesService = true
+				break
+			}
+		}
+		if !matchesService {
+			continue
+		}
+		for _, position := range c.store.serviceOps[serviceIndex] {
+			if position.operation < 0 || position.operation >= len(c.store.operations) || c.store.operations[position.operation].occurrence != position.occurrence {
+				return false
+			}
+			name, ok := compactString(c.store, c.store.operations[position.operation].name)
+			if !ok {
+				return false
+			}
+			if strings.EqualFold(name, operation) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Catalog) attachCompactMappings() error {
+	if c == nil || c.store == nil {
+		return errors.New("catalog: compact operation store unavailable")
+	}
+	s := c.store
+	for serviceIndex, service := range s.services {
+		if serviceIndex >= len(s.serviceOps) || !validSpan(service.aliases, len(s.refs)) {
+			return errors.New("catalog: compact service operation index is corrupt")
+		}
+		endpoint, ok := compactString(s, service.endpoint)
+		if !ok {
+			return errors.New("catalog: compact service endpoint is corrupt")
+		}
+		for _, position := range s.serviceOps[serviceIndex] {
+			if position.operation < 0 || position.operation >= len(s.operations) || s.operations[position.operation].occurrence != position.occurrence {
+				return errors.New("catalog: compact operation index is corrupt")
+			}
+			operation := &s.operations[position.operation]
+			name, ok := compactString(s, operation.name)
+			if !ok {
+				return errors.New("catalog: compact operation name is corrupt")
+			}
+			var spansForOperation []mappingSpan
+			mappingCount := 0
+			for aliasOffset := uint32(0); aliasOffset < service.aliases.count; aliasOffset++ {
+				alias, ok := compactString(s, s.refs[service.aliases.start+aliasOffset])
+				if !ok {
+					return errors.New("catalog: compact service alias is corrupt")
+				}
+				spans := s.mappingIndex[operationKey(alias, name)]
+				for _, span := range spans {
+					if !validMappingSpan(span, len(s.mappings)) {
+						return errors.New("catalog: mapping span exceeds canonical store")
+					}
+					spansForOperation = append(spansForOperation, span)
+					mappingCount += int(span.count)
+				}
+				if mappingCount > 0 {
+					break
+				}
+			}
+			operation.mappings = spansForOperation
+			permissionless := c.permissionless[operationKey(endpoint, name)]
+			switch {
+			case mappingCount > 0 && permissionless:
+				operation.mappingState = EvidencePermissionless
+			case mappingCount > 0:
+				operation.mappingState = EvidenceKnown
+				allAbsent := true
+				for _, span := range spansForOperation {
+					for offset := uint32(0); offset < span.count; offset++ {
+						state := s.mappings[span.start+offset].state
+						if state != EvidenceAbsent {
+							allAbsent = false
+						}
+						if state == EvidenceContradictory {
+							operation.mappingState = EvidenceContradictory
+						}
+					}
+				}
+				if allAbsent {
+					operation.mappingState = EvidenceAbsent
+				}
+			case permissionless:
+				operation.mappingState = EvidencePermissionless
+			default:
+				operation.mappingState = EvidenceAbsent
+			}
+		}
+	}
+	return nil
+}
+
 func validMappingSpan(span mappingSpan, length int) bool {
 	return uint64(span.start)+uint64(span.count) <= uint64(length)
 }
@@ -1245,9 +1468,12 @@ func (s *compactStore) addCondition(c *Condition, intern func(string) (stringID,
 // compiled plans are not retained as graphs: strings become IDs, nested values
 // become checked spans, and plans retain only occurrence references.
 func (c *Catalog) compactEvidence() error {
-	s := &compactStore{strings: c.strings, stringIndex: c.stringIndex,
-		operationIndex: map[string][]compactIndex{}, occurrences: map[string][]compactPosition{},
-		mappingIndex: map[string][]mappingSpan{}, actionIndex: map[string][]compactActionIndex{}, compactPlans: map[occurrenceID]compactPlan{}}
+	s := c.store
+	if s == nil {
+		s = &compactStore{strings: c.strings, stringIndex: c.stringIndex,
+			operationIndex: map[string][]compactIndex{}, occurrences: map[string][]compactPosition{},
+			mappingIndex: map[string][]mappingSpan{}, actionIndex: map[string][]compactActionIndex{}}
+	}
 	intern := func(value string) (stringID, error) { return c.internString(value) }
 	span := func(count int) (stringSpan, error) {
 		if count < 0 || uint64(count) > uint64(maxCatalogItems) {
@@ -1269,310 +1495,291 @@ func (c *Catalog) compactEvidence() error {
 	}
 	// Interning may append to the shared builder pool; keep the compact store's
 	// view synchronized after every conversion phase.
-	for _, service := range c.services {
-		key, err := intern(service.Key)
-		if err != nil {
-			return err
-		}
-		id, err := intern(service.ID)
-		if err != nil {
-			return err
-		}
-		endpoint, err := intern(service.EndpointPrefix)
-		if err != nil {
-			return err
-		}
-		signing, err := intern(service.SigningName)
-		if err != nil {
-			return err
-		}
-		target, err := intern(service.TargetPrefix)
-		if err != nil {
-			return err
-		}
-		version, err := intern(service.APIVersion)
-		if err != nil {
-			return err
-		}
-		protocol, err := intern(service.Protocol)
-		if err != nil {
-			return err
-		}
-		protocols, err := addStrings(service.Protocols)
-		if err != nil {
-			return err
-		}
-		aliases, err := addStrings(service.Aliases)
-		if err != nil {
-			return err
-		}
-		s.services = append(s.services, compactService{key: key, id: id, endpoint: endpoint, signing: signing, target: target, apiVersion: version, protocol: protocol, protocols: protocols, aliases: aliases})
-	}
-	for serviceIndex, serviceRecord := range c.services {
-		for _, sourceOperation := range serviceRecord.Operations {
-			service, err := intern(sourceOperation.Service)
+	if len(c.services) > 0 {
+		serviceBase := len(s.services)
+		for _, service := range c.services {
+			key, err := intern(service.Key)
 			if err != nil {
 				return err
 			}
-			name, err := intern(sourceOperation.Name)
+			id, err := intern(service.ID)
 			if err != nil {
 				return err
 			}
-			input, err := intern(sourceOperation.InputShape)
+			endpoint, err := intern(service.EndpointPrefix)
 			if err != nil {
 				return err
 			}
-			output, err := intern(sourceOperation.OutputShape)
+			signing, err := intern(service.SigningName)
 			if err != nil {
 				return err
 			}
-			r := sourceOperation.Route
-			method, err := intern(r.Method)
+			target, err := intern(service.TargetPrefix)
 			if err != nil {
 				return err
 			}
-			uri, err := intern(r.URI)
+			version, err := intern(service.APIVersion)
 			if err != nil {
 				return err
 			}
-			discriminator, err := intern(r.QueryDiscriminator)
+			protocol, err := intern(service.Protocol)
 			if err != nil {
 				return err
 			}
-			target, err := intern(r.TargetPrefix)
+			protocols, err := addStrings(service.Protocols)
 			if err != nil {
 				return err
 			}
-			jsonVersion, err := intern(r.JSONVersion)
+			aliases, err := addStrings(service.Aliases)
 			if err != nil {
 				return err
 			}
-			qstart := len(s.queryRecords)
-			for _, q := range sourceOperation.QueryBindings {
-				qm, e := intern(q.Member)
-				if e != nil {
-					return e
-				}
-				ql, e := intern(q.LocationName)
-				if e != nil {
-					return e
-				}
-				s.queryRecords = append(s.queryRecords, compactQuery{member: qm, location: ql, required: q.Required})
-			}
-			s.operations = append(s.operations, compactOperation{occurrence: sourceOperation.occurrenceID, service: service, name: name, input: input, output: output, route: compactRoute{method: method, uri: uri, discriminator: discriminator, target: target, jsonVersion: jsonVersion, responseCode: r.ResponseCode}, queries: stringSpan{start: uint32(qstart), count: uint32(len(sourceOperation.QueryBindings))}, state: sourceOperation.State, mappingState: sourceOperation.MappingState, mappings: append([]mappingSpan(nil), sourceOperation.mappingSpans...)})
-			_ = serviceIndex
+			s.services = append(s.services, compactService{key: key, id: id, endpoint: endpoint, signing: signing, target: target, apiVersion: version, protocol: protocol, protocols: protocols, aliases: aliases})
 		}
-	}
-	for key, entries := range c.operations {
-		for _, entry := range entries {
-			if entry.operationIndex < 0 || entry.operationIndex >= len(s.operations) {
-				return errors.New("catalog: operation index exceeds compact store")
-			}
-			s.operationIndex[key] = append(s.operationIndex[key], compactIndex{operation: entry.operationIndex, occurrence: entry.occurrence})
-		}
-	}
-	for key, positions := range c.operationOccurrences {
-		for _, p := range positions {
-			if p.operationIndex < 0 || p.operationIndex >= len(s.operations) {
-				return errors.New("catalog: operation occurrence index exceeds compact store")
-			}
-			s.occurrences[key] = append(s.occurrences[key], compactPosition{operation: p.operationIndex, occurrence: p.occurrence})
-		}
-	}
-	for i, indexes := range c.serviceOperationIndexes {
-		for _, index := range indexes {
-			if index.occurrence == invalidOccurrenceID || index.operation < 0 || index.operation >= len(s.operations) || s.operations[index.operation].occurrence != index.occurrence {
-				return errors.New("catalog: service operation index exceeds compact store")
-			}
-			for len(s.serviceOps) <= i {
+		for serviceIndex, serviceRecord := range c.services {
+			compactServiceIndex := serviceBase + serviceIndex
+			for len(s.serviceOps) <= compactServiceIndex {
 				s.serviceOps = append(s.serviceOps, nil)
 			}
-			s.serviceOps[i] = append(s.serviceOps[i], index)
-		}
-	}
-	for key, spans := range c.mappingIndex {
-		s.mappingIndex[key] = append([]mappingSpan(nil), spans...)
-	}
-	s.mappingOrder = append(s.mappingOrder, c.mappingOrder...)
-	mappingIndexes := make(map[occurrenceID]int, len(s.mappings))
-	for i, m := range c.mappingStore {
-		mappingIndexes[m.occurrenceID] = i
-	}
-	for _, m := range c.mappingStore {
-		action, err := intern(m.Action)
-		if err != nil {
-			return err
-		}
-		override, err := intern(m.ARNOverride)
-		if err != nil {
-			return err
-		}
-		notice, err := intern(m.Notice)
-		if err != nil {
-			return err
-		}
-		rstart := len(s.mappingResources)
-		for _, resource := range m.Resources {
-			p, e := intern(resource.Parameter)
-			if e != nil {
-				return e
-			}
-			t, e := intern(resource.Template)
-			if e != nil {
-				return e
-			}
-			ci, e := s.addCondition(resource.Condition, intern)
-			if e != nil {
-				return e
-			}
-			s.mappingResources = append(s.mappingResources, compactResourceMapping{occurrence: resource.occurrenceID, parameter: p, template: t, condition: ci})
-		}
-		astart := len(s.mapPairs)
-		for k, v := range m.ResourceARNMappings {
-			kk, e := intern(k)
-			if e != nil {
-				return e
-			}
-			vv, e := intern(v)
-			if e != nil {
-				return e
-			}
-			s.mapPairs = append(s.mapPairs, compactMapPair{key: kk, value: vv, resource: -1})
-		}
-		acond := stringSpan{start: uint32(astart), count: uint32(len(s.mapPairs) - astart)}
-		cstart := len(s.mapPairs)
-		for _, k := range m.conditionMappingOrder {
-			v, ok := m.ConditionMappings[k]
-			if !ok {
-				return fmt.Errorf("catalog: condition mapping %q missing", k)
-			}
-			kk, e := intern(k)
-			if e != nil {
-				return e
-			}
-			p, e := intern(v.Parameter)
-			if e != nil {
-				return e
-			}
-			t, e := intern(v.Template)
-			if e != nil {
-				return e
-			}
-			ci, e := s.addCondition(v.Condition, intern)
-			if e != nil {
-				return e
-			}
-			ri := len(s.mappingResources)
-			s.mappingResources = append(s.mappingResources, compactResourceMapping{occurrence: v.occurrenceID, parameter: p, template: t, condition: ci})
-			s.mapPairs = append(s.mapPairs, compactMapPair{key: kk, value: invalidStringID, resource: ri})
-		}
-		_ = cstart
-		condition, err := s.addCondition(m.Condition, intern)
-		if err != nil {
-			return err
-		}
-		s.mappings = append(s.mappings, compactMapping{occurrence: m.occurrenceID, action: action, state: m.State, resources: stringSpan{start: uint32(rstart), count: uint32(len(m.Resources))}, arn: acond, conditionMappings: stringSpan{start: uint32(cstart), count: uint32(len(s.mapPairs) - cstart)}, condition: condition, arnOverride: override, notice: notice})
-	}
-	actionCompactIndexes := map[string][]int{}
-	for _, position := range c.buildActionOrder {
-		definitions := c.buildActions[position.key]
-		if position.index < 0 || position.index >= len(definitions) {
-			return errors.New("catalog: action occurrence order is corrupt")
-		}
-		key, d := position.key, definitions[position.index]
-		service, e := intern(d.Service)
-		if e != nil {
-			return e
-		}
-		name, e := intern(d.Name)
-		if e != nil {
-			return e
-		}
-		access, e := intern(d.AccessLevel)
-		if e != nil {
-			return e
-		}
-		description, e := intern(d.Description)
-		if e != nil {
-			return e
-		}
-		start := len(s.resources)
-		for _, r := range d.Resources {
-			n, e := intern(r.Name)
-			if e != nil {
-				return e
-			}
-			ck, e := addStrings(r.ConditionKeys)
-			if e != nil {
-				return e
-			}
-			ds, e := addStrings(r.DependentActions)
-			if e != nil {
-				return e
-			}
-			dependentsStart := len(s.dependents)
-			for i, dependency := range r.DependentActions {
-				dependencyID := invalidOccurrenceID
-				if i < len(r.dependentActionIDs) {
-					dependencyID = r.dependentActionIDs[i]
+			for _, sourceOperation := range serviceRecord.Operations {
+				service, err := intern(sourceOperation.Service)
+				if err != nil {
+					return err
 				}
-				actionID, e := intern(dependency)
+				name, err := intern(sourceOperation.Name)
+				if err != nil {
+					return err
+				}
+				input, err := intern(sourceOperation.InputShape)
+				if err != nil {
+					return err
+				}
+				output, err := intern(sourceOperation.OutputShape)
+				if err != nil {
+					return err
+				}
+				r := sourceOperation.Route
+				method, err := intern(r.Method)
+				if err != nil {
+					return err
+				}
+				uri, err := intern(r.URI)
+				if err != nil {
+					return err
+				}
+				discriminator, err := intern(r.QueryDiscriminator)
+				if err != nil {
+					return err
+				}
+				target, err := intern(r.TargetPrefix)
+				if err != nil {
+					return err
+				}
+				jsonVersion, err := intern(r.JSONVersion)
+				if err != nil {
+					return err
+				}
+				qstart := len(s.queryRecords)
+				for _, q := range sourceOperation.QueryBindings {
+					qm, e := intern(q.Member)
+					if e != nil {
+						return e
+					}
+					ql, e := intern(q.LocationName)
+					if e != nil {
+						return e
+					}
+					s.queryRecords = append(s.queryRecords, compactQuery{member: qm, location: ql, required: q.Required})
+				}
+				operationIndex := len(s.operations)
+				s.operations = append(s.operations, compactOperation{occurrence: sourceOperation.occurrenceID, service: service, name: name, input: input, output: output, route: compactRoute{method: method, uri: uri, discriminator: discriminator, target: target, jsonVersion: jsonVersion, responseCode: r.ResponseCode}, queries: stringSpan{start: uint32(qstart), count: uint32(len(sourceOperation.QueryBindings))}, state: sourceOperation.State, mappingState: sourceOperation.MappingState, mappings: append([]mappingSpan(nil), sourceOperation.mappingSpans...)})
+				position := compactOperationPosition{operation: operationIndex, occurrence: sourceOperation.occurrenceID}
+				s.serviceOps[compactServiceIndex] = append(s.serviceOps[compactServiceIndex], position)
+				occurrenceKey := operationKey(serviceRecord.EndpointPrefix, sourceOperation.Name)
+				s.occurrences[occurrenceKey] = append(s.occurrences[occurrenceKey], compactPosition{operation: operationIndex, occurrence: sourceOperation.occurrenceID})
+				for _, alias := range serviceRecord.Aliases {
+					key := operationKey(alias, sourceOperation.Name)
+					s.operationIndex[key] = append(s.operationIndex[key], compactIndex{operation: operationIndex, occurrence: sourceOperation.occurrenceID})
+				}
+			}
+		}
+		// API operations and indexes are now represented by the compact store.
+		// Release the decoded graph before converting mappings and definitions so
+		// those construction phases do not overlap at the allocator high-water mark.
+		c.services = nil
+		c.serviceIndex = nil
+		c.operations = nil
+		c.operationOccurrences = nil
+		c.serviceOperationIndexes = nil
+	}
+	if len(c.mappingStore) > 0 {
+		base := uint32(len(s.mappings))
+		for key, spans := range c.mappingIndex {
+			for _, span := range spans {
+				if !validMappingSpan(span, len(c.mappingStore)) || uint64(base)+uint64(span.start) > uint64(maxCatalogItems) {
+					return errors.New("catalog: mapping span exceeds canonical store")
+				}
+				span.start += base
+				s.mappingIndex[key] = append(s.mappingIndex[key], span)
+			}
+		}
+		for _, position := range c.mappingOrder {
+			if position.storeIndex >= uint32(len(c.mappingStore)) || uint64(base)+uint64(position.storeIndex) > uint64(maxCatalogItems) {
+				return errors.New("catalog: mapping occurrence order is corrupt")
+			}
+			position.storeIndex += base
+			s.mappingOrder = append(s.mappingOrder, position)
+		}
+		for _, m := range c.mappingStore {
+			action, err := intern(m.Action)
+			if err != nil {
+				return err
+			}
+			override, err := intern(m.ARNOverride)
+			if err != nil {
+				return err
+			}
+			notice, err := intern(m.Notice)
+			if err != nil {
+				return err
+			}
+			rstart := len(s.mappingResources)
+			for _, resource := range m.Resources {
+				p, e := intern(resource.Parameter)
 				if e != nil {
 					return e
 				}
-				s.dependents = append(s.dependents, compactDependent{occurrence: dependencyID, action: actionID})
+				t, e := intern(resource.Template)
+				if e != nil {
+					return e
+				}
+				ci, e := s.addCondition(resource.Condition, intern)
+				if e != nil {
+					return e
+				}
+				s.mappingResources = append(s.mappingResources, compactResourceMapping{occurrence: resource.occurrenceID, parameter: p, template: t, condition: ci})
 			}
-			s.resources = append(s.resources, compactResource{occurrence: r.occurrenceID, name: n, conditionKeys: ck, dependentActions: ds, dependentIDs: append([]occurrenceID(nil), r.dependentActionIDs...), dependents: stringSpan{start: uint32(dependentsStart), count: uint32(len(r.DependentActions))}})
+			astart := len(s.mapPairs)
+			for k, v := range m.ResourceARNMappings {
+				kk, e := intern(k)
+				if e != nil {
+					return e
+				}
+				vv, e := intern(v)
+				if e != nil {
+					return e
+				}
+				s.mapPairs = append(s.mapPairs, compactMapPair{key: kk, value: vv, resource: -1})
+			}
+			acond := stringSpan{start: uint32(astart), count: uint32(len(s.mapPairs) - astart)}
+			cstart := len(s.mapPairs)
+			for _, k := range m.conditionMappingOrder {
+				v, ok := m.ConditionMappings[k]
+				if !ok {
+					return fmt.Errorf("catalog: condition mapping %q missing", k)
+				}
+				kk, e := intern(k)
+				if e != nil {
+					return e
+				}
+				p, e := intern(v.Parameter)
+				if e != nil {
+					return e
+				}
+				t, e := intern(v.Template)
+				if e != nil {
+					return e
+				}
+				ci, e := s.addCondition(v.Condition, intern)
+				if e != nil {
+					return e
+				}
+				ri := len(s.mappingResources)
+				s.mappingResources = append(s.mappingResources, compactResourceMapping{occurrence: v.occurrenceID, parameter: p, template: t, condition: ci})
+				s.mapPairs = append(s.mapPairs, compactMapPair{key: kk, value: invalidStringID, resource: ri})
+			}
+			_ = cstart
+			condition, err := s.addCondition(m.Condition, intern)
+			if err != nil {
+				return err
+			}
+			s.mappings = append(s.mappings, compactMapping{occurrence: m.occurrenceID, action: action, state: m.State, resources: stringSpan{start: uint32(rstart), count: uint32(len(m.Resources))}, arn: acond, conditionMappings: stringSpan{start: uint32(cstart), count: uint32(len(s.mapPairs) - cstart)}, condition: condition, arnOverride: override, notice: notice})
+		}
+		c.mappingStore = nil
+		c.mappingIndex = nil
+		c.mappingOrder = nil
+	}
+	if len(c.buildActionOrder) > 0 {
+		actionCompactIndexes := map[string][]int{}
+		for _, position := range c.buildActionOrder {
+			definitions := c.buildActions[position.key]
+			if position.index < 0 || position.index >= len(definitions) {
+				return errors.New("catalog: action occurrence order is corrupt")
+			}
+			key, d := position.key, definitions[position.index]
+			service, e := intern(d.Service)
+			if e != nil {
+				return e
+			}
+			name, e := intern(d.Name)
+			if e != nil {
+				return e
+			}
+			access, e := intern(d.AccessLevel)
+			if e != nil {
+				return e
+			}
+			description, e := intern(d.Description)
+			if e != nil {
+				return e
+			}
+			start := len(s.resources)
+			for _, r := range d.Resources {
+				n, e := intern(r.Name)
+				if e != nil {
+					return e
+				}
+				ck, e := addStrings(r.ConditionKeys)
+				if e != nil {
+					return e
+				}
+				ds, e := addStrings(r.DependentActions)
+				if e != nil {
+					return e
+				}
+				dependentsStart := len(s.dependents)
+				for i, dependency := range r.DependentActions {
+					dependencyID := invalidOccurrenceID
+					if i < len(r.dependentActionIDs) {
+						dependencyID = r.dependentActionIDs[i]
+					}
+					actionID, e := intern(dependency)
+					if e != nil {
+						return e
+					}
+					s.dependents = append(s.dependents, compactDependent{occurrence: dependencyID, action: actionID})
+				}
+				s.resources = append(s.resources, compactResource{occurrence: r.occurrenceID, name: n, conditionKeys: ck, dependentActions: ds, dependentIDs: append([]occurrenceID(nil), r.dependentActionIDs...), dependents: stringSpan{start: uint32(dependentsStart), count: uint32(len(r.DependentActions))}})
 
-		}
-		index := len(s.actions)
-		s.actions = append(s.actions, compactAction{occurrence: d.occurrenceID, service: service, name: name, access: access, description: description, resources: stringSpan{start: uint32(start), count: uint32(len(d.Resources))}, state: d.State})
-		s.actionIndex[key] = append(s.actionIndex[key], compactActionIndex{action: index, occurrence: d.occurrenceID})
-		actionCompactIndexes[key] = append(actionCompactIndexes[key], index)
-	}
-	actionIndexes := make(map[occurrenceID]int, len(s.actions))
-	for key, indexes := range actionCompactIndexes {
-		for i, index := range indexes {
-			if index >= 0 && index < len(s.actions) {
-				actionIndexes[c.buildActions[key][i].occurrenceID] = index
 			}
+			index := len(s.actions)
+			s.actions = append(s.actions, compactAction{occurrence: d.occurrenceID, service: service, name: name, access: access, description: description, resources: stringSpan{start: uint32(start), count: uint32(len(d.Resources))}, state: d.State})
+			s.actionIndex[key] = append(s.actionIndex[key], compactActionIndex{action: index, occurrence: d.occurrenceID})
+			actionCompactIndexes[key] = append(actionCompactIndexes[key], index)
 		}
-	}
-	for occurrence, plan := range c.plans {
-		compact := compactPlan{occurrence: occurrence, diagnostics: append([]ValidationDiagnostic(nil), plan.Diagnostics...)}
-		var err error
-		compact.service, err = intern(plan.Service)
-		if err != nil {
-			return err
-		}
-		compact.operation, err = intern(plan.Operation)
-		if err != nil {
-			return err
-		}
-		for _, compiled := range plan.Mappings {
-			mappingIndex, ok := mappingIndexes[compiled.Mapping.occurrenceID]
-			if !ok {
-				return errors.New("catalog: static mapping occurrence is corrupt")
+		for _, position := range c.buildActionOrder {
+			indexes := actionCompactIndexes[position.key]
+			if position.index < 0 || position.index >= len(indexes) || position.index >= len(c.buildActions[position.key]) {
+				return errors.New("catalog: action occurrence order is corrupt")
 			}
-			definitionIndex, ok := actionIndexes[compiled.Definition.occurrenceID]
-			if !ok {
-				return errors.New("catalog: static action occurrence is corrupt")
+			index := indexes[position.index]
+			if index < 0 || index >= len(s.actions) || s.actions[index].occurrence != c.buildActions[position.key][position.index].occurrenceID {
+				return errors.New("catalog: action occurrence identity is corrupt")
 			}
-			compact.mappings = append(compact.mappings, compactStaticMapping{mapping: mappingIndex, action: definitionIndex, dependent: compiled.Dependent})
+			s.actionOrder = append(s.actionOrder, compactActionPosition{action: index, occurrence: s.actions[index].occurrence})
 		}
-		s.compactPlans[occurrence] = compact
-	}
-	s.actionOrder = nil
-	for _, position := range c.buildActionOrder {
-		indexes := actionCompactIndexes[position.key]
-		if position.index < 0 || position.index >= len(indexes) || position.index >= len(c.buildActions[position.key]) {
-			return errors.New("catalog: action occurrence order is corrupt")
-		}
-		index := indexes[position.index]
-		if index < 0 || index >= len(s.actions) || s.actions[index].occurrence != c.buildActions[position.key][position.index].occurrenceID {
-			return errors.New("catalog: action occurrence identity is corrupt")
-		}
-		s.actionOrder = append(s.actionOrder, compactActionPosition{action: index, occurrence: s.actions[index].occurrence})
+		c.buildActions = nil
+		c.buildActionOrder = nil
 	}
 	s.strings = c.strings
 	s.stringIndex = c.stringIndex
@@ -1582,7 +1789,6 @@ func (c *Catalog) compactEvidence() error {
 	c.operations = nil
 	c.operationOccurrences = nil
 	c.buildActions = nil
-	c.permissionless = nil
 	c.mappingStore = nil
 	c.mappingIndex = nil
 	c.mappingOrder = nil
@@ -1650,6 +1856,111 @@ func decodeAPI(file string, b []byte) (rawAPI, error) {
 type orderedJSONValue struct {
 	key   string
 	value json.RawMessage
+}
+
+func forEachObjectValue(data []byte, field string, fn func(string, []byte) error) error {
+	return forEachObjectValueReader(bytes.NewReader(data), field, fn)
+}
+
+func forEachObjectValueReader(reader io.Reader, field string, fn func(string, []byte) error) error {
+	decoder := json.NewDecoder(reader)
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return errors.New("expected object")
+	}
+	found := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := key.(string)
+		if !ok {
+			return errors.New("object key is not a string")
+		}
+		if name != field {
+			if err := skipJSONValue(decoder); err != nil {
+				return err
+			}
+			continue
+		}
+		found = true
+		start, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if start != json.Delim('{') {
+			return fmt.Errorf("%s is not an object", field)
+		}
+		for decoder.More() {
+			key, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok {
+				return errors.New("object key is not a string")
+			}
+			var value json.RawMessage
+			if err := decoder.Decode(&value); err != nil {
+				return err
+			}
+			if err := fn(name, value); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("malformed object")
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return errors.New("malformed object")
+	}
+	if !found {
+		return fmt.Errorf("missing %s", field)
+	}
+	var extra json.Token
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("trailing JSON value")
+	}
+	return nil
+}
+
+func skipJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		for decoder.More() {
+			if _, err := decoder.Token(); err != nil {
+				return err
+			}
+			if err := skipJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := skipJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("malformed JSON delimiter")
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 func orderedObjectValues(data []byte, field string) ([]orderedJSONValue, error) {
@@ -1873,7 +2184,20 @@ func (c *Catalog) addAPI(file string, a rawAPI) error {
 		return fmt.Errorf("%s: incomplete API metadata", file)
 	}
 	key := m.UID
-	if _, ok := c.serviceIndex[strings.ToLower(key)]; ok {
+	duplicateKey := len(c.serviceIndex[strings.ToLower(key)]) > 0
+	if !duplicateKey && c.store != nil {
+		for _, service := range c.store.services {
+			prior, ok := compactString(c.store, service.key)
+			if !ok {
+				return errors.New("catalog: compact service key is corrupt")
+			}
+			if strings.EqualFold(prior, key) {
+				duplicateKey = true
+				break
+			}
+		}
+	}
+	if duplicateKey {
 		key = path.Dir(file) + "/" + key
 	}
 	s := Service{Key: key, ID: m.ServiceID, EndpointPrefix: m.EndpointPrefix, SigningName: m.SigningName, TargetPrefix: m.TargetPrefix, APIVersion: m.APIVersion, Protocol: m.Protocol, Protocols: cloneStrings(m.Protocols)}
@@ -2001,13 +2325,20 @@ func (c *Catalog) addDefinition(d rawService) error {
 			a.Resources = append(a.Resources, resource)
 		}
 		prior := c.buildActions[k]
-		if len(prior) > 0 {
+		compactPrior := c.store.actionIndex[k]
+		if len(prior)+len(compactPrior) > 0 {
 			// IAM definitions contain case-variant duplicate evidence in the
 			// pinned snapshot. Retain every record and make lookup fail closed
 			// rather than selecting one permission silently.
 			a.State = EvidenceContradictory
 			for i := range prior {
 				prior[i].State = EvidenceContradictory
+			}
+			for _, position := range compactPrior {
+				if position.action < 0 || position.action >= len(c.store.actions) || c.store.actions[position.action].occurrence != position.occurrence {
+					return errors.New("catalog: compact action index is corrupt")
+				}
+				c.store.actions[position.action].state = EvidenceContradictory
 			}
 		}
 		definitionIndex := len(prior)
@@ -2154,6 +2485,16 @@ func readBundle(fn func(name string, data []byte) error) error {
 }
 
 func readBundleData(bundle []byte, fn func(name string, data []byte) error) error {
+	return readBundleStreamData(bundle, func(name string, size int64, reader io.Reader) error {
+		data := make([]byte, size)
+		if _, err := io.ReadFull(reader, data); err != nil {
+			return fmt.Errorf("bundle entry %q is truncated: %w", name, err)
+		}
+		return fn(name, data)
+	})
+}
+
+func readBundleStreamData(bundle []byte, fn func(name string, size int64, reader io.Reader) error) error {
 	compressed := bytes.NewReader(bundle)
 	gz, err := gzip.NewReader(compressed)
 	if err != nil {
@@ -2195,12 +2536,15 @@ func readBundleData(bundle []byte, fn func(name string, data []byte) error) erro
 		} else if header.Name != bundleFixedEntries[entries] {
 			return fmt.Errorf("bundle: expected %q, got %q", bundleFixedEntries[entries], header.Name)
 		}
-		data := make([]byte, header.Size)
-		if _, err := io.ReadFull(tr, data); err != nil {
+		entry := &io.LimitedReader{R: tr, N: header.Size}
+		if err := fn(header.Name, header.Size, entry); err != nil {
+			return err
+		}
+		if _, err := io.Copy(io.Discard, entry); err != nil {
 			return fmt.Errorf("bundle entry %q is truncated: %w", header.Name, err)
 		}
-		if err := fn(header.Name, data); err != nil {
-			return err
+		if entry.N != 0 {
+			return fmt.Errorf("bundle entry %q is truncated", header.Name)
 		}
 		entries++
 	}
