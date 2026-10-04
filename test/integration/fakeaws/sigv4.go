@@ -312,7 +312,12 @@ func (s *Server) handle(writer http.ResponseWriter, req *http.Request) {
 	}
 	status := http.StatusInternalServerError
 	var body []byte
-	defer func() { s.record(req, body, started, status, requestID) }()
+	recorded := false
+	defer func() {
+		if !recorded {
+			s.record(req, body, started, status, requestID)
+		}
+	}()
 	if req == nil || req.Host != s.Host {
 		status = http.StatusBadRequest
 		http.Error(writer, "unexpected endpoint", status)
@@ -352,12 +357,14 @@ func (s *Server) handle(writer http.ResponseWriter, req *http.Request) {
 			time.Sleep(failure.Latency)
 		}
 		if failure.Disconnect {
+			status = 0
+			s.record(req, body, started, status, requestID)
+			recorded = true
 			if h, ok := writer.(http.Hijacker); ok {
 				if conn, _, err := h.Hijack(); err == nil {
 					_ = conn.Close()
 				}
 			}
-			status = 0
 			return
 		}
 		status = failure.Status
