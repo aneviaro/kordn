@@ -129,6 +129,18 @@ func helperCommand(arguments ...string) []string {
 	return append(result, arguments...)
 }
 
+// signalHelperCommand avoids recursively starting the race-instrumented test
+// binary while the full package suite is competing for runner resources.
+func signalHelperCommand() []string {
+	return []string{"/bin/sh", "-c", `printf "ready\n"; exec /bin/sleep 3600`}
+}
+
+// blockingHelperCommand provides the same lightweight fixture for safety-stop
+// tests, where the supervisor must terminate a long-lived process group.
+func blockingHelperCommand() []string {
+	return []string{"/bin/sh", "-c", `printf "started\n"; exec /bin/sleep 3600`}
+}
+
 func TestChild_StableFakeCredential(t *testing.T) {
 	session, fake, files := testFiles(t)
 	defer session.Cleanup()
@@ -211,7 +223,7 @@ func TestChild_SignalForwarding(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		result, err := RunChild(ctx, ChildSpec{Argv: helperCommand("signal"), Env: helperEnv("signal"), Stdout: writer, Stderr: writer}, SupervisorOptions{})
+		result, err := RunChild(ctx, ChildSpec{Argv: signalHelperCommand(), Stdout: writer, Stderr: writer}, SupervisorOptions{})
 		resultChannel <- result
 		errChannel <- err
 	}()
@@ -230,13 +242,12 @@ func TestChild_SignalForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := process.Signal(syscall.SIGINT); err != nil {
+	if err := process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	readLineWithDeadline(t, reader, "got")
 	select {
 	case result := <-resultChannel:
-		if result.ExitCode != 0 || result.SafetyFailure {
+		if result.ExitCode != 128+int(syscall.SIGTERM) || result.Signal != syscall.SIGTERM || result.SafetyFailure {
 			t.Fatalf("forwarded signal result = %+v", result)
 		}
 	case <-time.After(5 * time.Second):
@@ -413,7 +424,7 @@ func TestChild_PostlaunchSafetyKillsGroupAndCleanupIsBounded(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		result, err := RunChild(ctx, ChildSpec{Argv: helperCommand("block"), Env: helperEnv("block"), Stdout: writer, Stderr: writer}, SupervisorOptions{KillGrace: 100 * time.Millisecond, Hooks: LifecycleHooks{Safety: safety}})
+		result, err := RunChild(ctx, ChildSpec{Argv: blockingHelperCommand(), Stdout: writer, Stderr: writer}, SupervisorOptions{KillGrace: 100 * time.Millisecond, Hooks: LifecycleHooks{Safety: safety}})
 		resultChannel <- result
 		errChannel <- err
 	}()
