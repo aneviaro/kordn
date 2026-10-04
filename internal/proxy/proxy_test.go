@@ -245,6 +245,29 @@ func TestProxy_TunnelsNonAWSOpaque(t *testing.T) {
 	}
 }
 
+func TestProxy_RejectsUnsupportedAWSLookingCONNECT(t *testing.T) {
+	var lookups, dials atomic.Int32
+	server := newTestProxy(t, Config{
+		Resolver: ResolverFunc(func(context.Context, string, string) ([]net.IP, error) {
+			lookups.Add(1)
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		}),
+		Dialer: DialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			dials.Add(1)
+			return nil, fmt.Errorf("unexpected dial")
+		}),
+	})
+	conn := openProxy(t, server)
+	writeConnect(t, conn, "unknown-service.us-east-1.amazonaws.com:443", true)
+	if response := readProxyResponse(t, conn); response.StatusCode != http.StatusForbidden {
+		t.Fatalf("unsupported AWS-looking CONNECT status = %d, want 403", response.StatusCode)
+	}
+	_ = conn.Close()
+	if lookups.Load() != 0 || dials.Load() != 0 {
+		t.Fatalf("unsupported AWS-looking CONNECT reached destination handling: lookups=%d dials=%d", lookups.Load(), dials.Load())
+	}
+}
+
 func TestProxy_NonAWSTunnelOutlivesConnectTimeout(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -758,6 +781,47 @@ type failingPipelineDecoder struct{ err error }
 
 func (d failingPipelineDecoder) Decode(context.Context, *awsrequest.VerifiedRequest, awsrequest.AWSEndpoint) (*awsrequest.DecodedAWSRequest, error) {
 	return nil, d.err
+}
+
+func TestProxy_RealPipelineDenialDoesNotReachUpstream(t *testing.T) {
+	const host = "sts.example.test"
+	endpoint := awsrequest.AWSEndpoint{Partition: "aws", Host: host, Service: "sts", SigningService: "sts", SigningRegion: "us-east-1", Region: "us-east-1", Scope: awsrequest.ScopeRegional}
+	request := httptest.NewRequest(http.MethodPost, "https://"+host+"/", strings.NewReader("request must not reach upstream"))
+	request.Host = host
+	verified := &awsrequest.VerifiedRequest{Request: request, Endpoint: endpoint, Protocol: awsrequest.ProtocolJSON11, SigningScheme: awsrequest.SigningHeaderV4, SigningRegion: "us-east-1", SigningService: "sts", PayloadMode: awsrequest.PayloadHashSHA256}
+	decoded := &awsrequest.DecodedAWSRequest{Partition: "aws", EndpointHost: host, Service: "sts", SigningService: "sts", SigningRegion: "us-east-1", Region: "us-east-1", Scope: awsrequest.ScopeRegional, CallerAccountID: "123456789012", Protocol: awsrequest.ProtocolJSON11, Operation: "GetCallerIdentity", Method: http.MethodPost, CanonicalPath: "/", Parameters: map[string]awsrequest.Value{}, PayloadHashMode: awsrequest.PayloadHashSHA256}
+	mapping := &awsrequest.MappingResult{Service: "sts", Operation: "GetCallerIdentity", MapperVersion: "test-mapper", Confidence: awsrequest.ConfidenceHigh, Requirements: []awsrequest.IAMRequirement{{Action: "sts:GetCallerIdentity", Resources: []string{"*"}, ScopeKind: awsrequest.ScopeKnownGlobal}}}
+	var upstreamCalls atomic.Int32
+	collector := &pipelineAuditCollector{}
+	server := newTestProxy(t, Config{
+		Classifier: testAWSClassifier(host), InboundAuthenticator: pipelineAuthenticator{verified: verified}, Decoder: pipelineDecoder{decoded: decoded}, Mapper: pipelineMapper{mapping: mapping}, Policy: pipelinePolicy{decision: policy.Decision{Result: policy.DecisionDeny, ReasonCode: awserror.ReasonPolicyNoMatchingAllow}}, Audit: collector,
+		Upstream: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			upstreamCalls.Add(1)
+			return nil, errors.New("denied request reached upstream")
+		}),
+	})
+	conn := openProxy(t, server)
+	writeConnect(t, conn, host+":443", true)
+	if response := readProxyResponse(t, conn); response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status=%d, want 200", response.StatusCode)
+	}
+	clientTLS := tls.Client(conn, &tls.Config{RootCAs: server.CA().CertPool(), ServerName: host})
+	if err := clientTLS.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(clientTLS, "POST / HTTP/1.1\r\nHost: %s\r\nContent-Type: application/x-amz-json-1.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", host)
+	response := readProxyResponse(t, clientTLS)
+	body, _ := io.ReadAll(response.Body)
+	_ = clientTLS.Close()
+	if response.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "Kordn denied") {
+		t.Fatalf("denial response=%d body=%q", response.StatusCode, body)
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatal("real denied request reached upstream")
+	}
+	if len(collector.events) != 1 || collector.events[0].Decision.Result != string(policy.DecisionDeny) {
+		t.Fatalf("audit events=%+v", collector.events)
+	}
 }
 
 func TestProxy_PipelineDeniesBeforeResignOrForwardAndAudits(t *testing.T) {

@@ -109,9 +109,16 @@ func (r *Resigner) Resign(ctx context.Context, req *http.Request, endpoint awsre
 	if err := verifyRequestEndpoint(req, endpoint); err != nil {
 		return nil, err
 	}
-	region, ok := endpointSigningRegion(endpoint)
-	if !ok {
-		return nil, newError(CodeEndpointMismatch, "endpoint signing region is unavailable")
+	region := endpoint.SigningRegion
+	if region == "" && !endpoint.IsGlobal() {
+		region = endpoint.Region // compatibility for pre-identity endpoint callers
+	}
+	service := endpoint.SigningService
+	if service == "" {
+		service = endpoint.Service // compatibility for pre-identity endpoint callers
+	}
+	if region == "" || service == "" {
+		return nil, newError(CodeEndpointMismatch, "endpoint signing identity is unavailable")
 	}
 	canonicalQuery, err := scrubAndCanonicalizeQuery(req.URL.RawQuery)
 	if err != nil {
@@ -176,7 +183,7 @@ func (r *Resigner) Resign(ctx context.Context, req *http.Request, endpoint awsre
 		_ = body.Close()
 		return nil, newError(CodeInvalidTimestamp, "signing clock is invalid")
 	}
-	if err := r.options.Signer.SignHTTP(ctx, creds, outgoing, payloadHash, endpoint.Service, region, signingTime, func(options *v4.SignerOptions) {
+	if err := r.options.Signer.SignHTTP(ctx, creds, outgoing, payloadHash, service, region, signingTime, func(options *v4.SignerOptions) {
 		options.DisableHeaderHoisting = true
 		options.DisableURIPathEscaping = true
 	}); err != nil {
@@ -211,13 +218,6 @@ func retrieveCredentials(ctx context.Context, provider aws.CredentialsProvider) 
 		return aws.Credentials{}, newError(CodeMalformedCredential, "upstream credentials are unavailable")
 	}
 	return value, nil
-}
-
-func endpointSigningRegion(endpoint awsrequest.AWSEndpoint) (string, bool) {
-	if !endpoint.IsGlobal() {
-		return endpoint.Region, endpoint.Region != ""
-	}
-	return globalSigningRegion(endpoint.Service)
 }
 
 func validateResignPayloadHeaders(req *http.Request, allowUnsigned bool) error {

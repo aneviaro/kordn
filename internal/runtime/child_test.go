@@ -205,13 +205,26 @@ func TestChild_ArgvAndExitPropagation(t *testing.T) {
 
 func TestChild_SignalForwarding(t *testing.T) {
 	reader, writer := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
 	resultChannel := make(chan ChildResult, 1)
 	errChannel := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		result, err := RunChild(context.Background(), ChildSpec{Argv: helperCommand("signal"), Env: helperEnv("signal"), Stdout: writer, Stderr: writer}, SupervisorOptions{})
+		defer close(done)
+		result, err := RunChild(ctx, ChildSpec{Argv: helperCommand("signal"), Env: helperEnv("signal"), Stdout: writer, Stderr: writer}, SupervisorOptions{})
 		resultChannel <- result
 		errChannel <- err
 	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = reader.Close()
+		_ = writer.Close()
+		select {
+		case <-done:
+		case <-time.After(childCleanupTimeout):
+			t.Errorf("timed out waiting for signal child cleanup")
+		}
+	})
 	readLineWithDeadline(t, reader, "ready")
 	process, err := os.FindProcess(os.Getpid())
 	if err != nil {
@@ -393,14 +406,27 @@ func TestChild_PrelaunchFailureDoesNotSpawnAndExecFailureIs126(t *testing.T) {
 
 func TestChild_PostlaunchSafetyKillsGroupAndCleanupIsBounded(t *testing.T) {
 	reader, writer := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
 	safety := make(chan error, 1)
 	resultChannel := make(chan ChildResult, 1)
 	errChannel := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		result, err := RunChild(context.Background(), ChildSpec{Argv: helperCommand("block"), Env: helperEnv("block"), Stdout: writer, Stderr: writer}, SupervisorOptions{KillGrace: 100 * time.Millisecond, Hooks: LifecycleHooks{Safety: safety}})
+		defer close(done)
+		result, err := RunChild(ctx, ChildSpec{Argv: helperCommand("block"), Env: helperEnv("block"), Stdout: writer, Stderr: writer}, SupervisorOptions{KillGrace: 100 * time.Millisecond, Hooks: LifecycleHooks{Safety: safety}})
 		resultChannel <- result
 		errChannel <- err
 	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = reader.Close()
+		_ = writer.Close()
+		select {
+		case <-done:
+		case <-time.After(childCleanupTimeout):
+			t.Errorf("timed out waiting for blocking child cleanup")
+		}
+	})
 	readLineWithDeadline(t, reader, "started")
 	safety <- fmt.Errorf("proxy safety failure")
 	select {
@@ -438,6 +464,11 @@ func TestChild_ContextCancellationIsStartupFailureBeforeStart(t *testing.T) {
 	}
 }
 
+const (
+	childSynchronizationTimeout = 30 * time.Second
+	childCleanupTimeout         = 5 * time.Second
+)
+
 func readLineWithDeadline(t *testing.T, reader *io.PipeReader, want string) {
 	t.Helper()
 	lineChannel := make(chan string, 1)
@@ -457,7 +488,7 @@ func readLineWithDeadline(t *testing.T, reader *io.PipeReader, want string) {
 		}
 	case err := <-errChannel:
 		t.Fatal(err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(childSynchronizationTimeout):
 		t.Fatalf("timed out waiting for child line %q", want)
 	}
 }

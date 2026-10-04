@@ -38,6 +38,30 @@ TLS boundaries independently: a recognized AWS-like endpoint is terminated
 with a generated run CA, while a non-AWS server certificate and request/
 response bytes pass through unchanged.
 
+## Endpoint expansion threats
+
+A reviewed iamlive pin update can add a service identity and thereby widen the
+set of hosts eligible for TLS termination. The update must remain pinned,
+validated, and reviewed; the classifier accepts only unambiguous catalog
+identity and bounded commercial hostname shapes. Catalog ambiguity, duplicate
+wire evidence, or an unknown signing identity fails closed before forwarding.
+
+A generic JSON, Query, REST-JSON, or REST-XML shape is not authorization
+evidence. The request must still match an exact model wire version and
+operation, decode modeled inputs, resolve every IAM resource/dependency, pass
+the deny-by-default policy and audit gates, and be re-signed with the reviewed
+signing identity. A lookalike endpoint cannot use a generic shape to enter
+this path.
+
+Account-labelled endpoints, including S3 Control, retain the exact validated
+12-digit label as endpoint evidence and bind it to decoded caller/account
+context. A caller-controlled account label is never treated as proof of
+identity; mismatch denies before upstream. Non-AWS and unsupported AWS-looking
+hosts are rejected or kept opaque according to classification, never guessed
+into interception or silently tunneled around the AWS boundary. See the
+family-level status and excluded data-plane forms in
+[`docs/aws-endpoint-coverage.md`](aws-endpoint-coverage.md).
+
 ## Explicit V0.1 bypasses
 
 Same-user code is not contained. It may ignore or override `HTTP_PROXY` and

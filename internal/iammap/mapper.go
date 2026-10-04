@@ -109,8 +109,11 @@ func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) 
 		return nil, e
 	}
 	ep, e := m.classifier.Classify(req.EndpointHost)
-	if e != nil || ep.Partition != req.Partition || ep.Service != req.Service || ep.Region != req.Region || ep.IsGlobal() != (req.Region == "") {
+	if e != nil || !awsrequest.SameEndpoint(ep, decodedEndpoint(req)) {
 		return nil, mappingFailure(MappingFailureCatalogInconsistency, "endpoint", e)
+	}
+	if ep.AccountID != "" && ep.AccountID != req.CallerAccountID {
+		return nil, mappingFailure(MappingFailureCatalogInconsistency, "account", errors.New("endpoint account disagrees with caller context"))
 	}
 	protocol, ok := awsrequest.AuthoritativeProtocol(req.Service)
 	if !ok || protocol != req.Protocol {
@@ -216,6 +219,18 @@ func (m *Mapper) mapOne(ctx context.Context, req *awsrequest.DecodedAWSRequest) 
 	}
 	return r, nil
 }
+func decodedEndpoint(req *awsrequest.DecodedAWSRequest) awsrequest.AWSEndpoint {
+	if req == nil {
+		return awsrequest.AWSEndpoint{}
+	}
+	return awsrequest.AWSEndpoint{
+		Partition: req.Partition, Host: req.EndpointHost, Service: req.Service,
+		SigningService: req.SigningService, SigningRegion: req.SigningRegion,
+		Region: req.Region, Scope: req.Scope, Global: req.Region == "", FIPS: req.FIPS,
+		DualStack: req.DualStack, AccountID: req.AccountID,
+	}
+}
+
 func sortRequirements(v []awsrequest.IAMRequirement) {
 	sort.Slice(v, func(i, j int) bool {
 		if v[i].Action != v[j].Action {

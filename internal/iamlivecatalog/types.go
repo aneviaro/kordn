@@ -258,6 +258,14 @@ type Service struct {
 	Operations                                                     []Operation
 }
 
+// ServiceIdentity is the compact neutral identity view used by consumers
+// that do not need operation or IAM evidence. Its values are defensive copies
+// reconstructed from the immutable catalog store.
+type ServiceIdentity struct {
+	EndpointPrefix string
+	SigningName    string
+}
+
 // WireService is the catalog's compact, mapping-free representation of one
 // API model. Its operation list contains only evidence needed to identify a
 // wire request; IAM mappings and definitions are intentionally excluded.

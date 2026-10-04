@@ -42,9 +42,15 @@ type catalogOperationFixture struct {
 	Name              string `json:"name"`
 	Source            string `json:"source"`
 	SourceURL         string `json:"source_url"`
-	ExpectedService   string `json:"expected_service"`
+	ModelIdentifier   string `json:"model_identifier"`
+	APIService        string `json:"api_service"`
+	SigningService    string `json:"signing_service"`
+	EndpointRegion    string `json:"endpoint_region"`
+	SigningRegion     string `json:"signing_region"`
 	ExpectedOperation string `json:"expected_operation"`
 	ExpectedProtocol  string `json:"expected_protocol"`
+	EndpointStatus    string `json:"endpoint_status"`
+	MappingStatus     string `json:"mapping_status"`
 }
 
 type catalogOperationFixtureFile struct {
@@ -52,36 +58,56 @@ type catalogOperationFixtureFile struct {
 }
 
 type catalogOperationRequest struct {
-	host        string
-	service     string
-	region      string
-	operation   string
-	protocol    string
-	method      string
-	path        string
-	contentType string
-	target      string
-	body        string
-	wantStatus  int
+	host           string
+	service        string // endpoint/API service identity
+	signingService string
+	region         string // signing Region used by existing helper call sites
+	endpointRegion string // observed endpoint Region; empty for global endpoints
+	signingRegion  string
+	operation      string
+	protocol       string
+	method         string
+	path           string
+	contentType    string
+	target         string
+	body           string
+	wantStatus     int
+	wantReason     string
 }
 
 func catalogOperationRequests() map[string]catalogOperationRequest {
 	return map[string]catalogOperationRequest{
 		"ListUsers": {
-			host: "iam.amazonaws.com", service: "iam", region: "us-east-1", operation: "ListUsers", protocol: "query",
+			host: "iam.amazonaws.com", service: "iam", signingService: "iam", region: "us-east-1", endpointRegion: "", signingRegion: "us-east-1", operation: "ListUsers", protocol: "query",
 			method: http.MethodPost, path: "/", contentType: "application/x-www-form-urlencoded; charset=utf-8", body: "Action=ListUsers&Version=2010-05-08", wantStatus: http.StatusOK,
 		},
 		"GetObject": {
-			host: "s3.us-east-1.amazonaws.com", service: "s3", region: "us-east-1", operation: "GetObject", protocol: "rest-xml",
+			host: "s3.us-east-1.amazonaws.com", service: "s3", signingService: "s3", region: "us-east-1", endpointRegion: "us-east-1", signingRegion: "us-east-1", operation: "GetObject", protocol: "rest-xml",
 			method: http.MethodGet, path: "/fixture/object.txt", contentType: "application/xml", wantStatus: http.StatusOK,
 		},
 		"CreateFunction": {
-			host: "lambda.us-east-1.amazonaws.com", service: "lambda", region: "us-east-1", operation: "CreateFunction", protocol: "rest-json",
+			host: "lambda.us-east-1.amazonaws.com", service: "lambda", signingService: "lambda", region: "us-east-1", endpointRegion: "us-east-1", signingRegion: "us-east-1", operation: "CreateFunction", protocol: "rest-json",
 			method: http.MethodPost, path: "/2015-03-31/functions", contentType: "application/json", body: `{"FunctionName":"fixture-function","Role":"arn:aws:iam::123456789012:role/fixture","Code":{"ZipFile":"ZmFrZQ=="}}`, wantStatus: http.StatusForbidden,
 		},
 		"BatchExecuteStatement": {
-			host: "dynamodb.us-east-1.amazonaws.com", service: "dynamodb", region: "us-east-1", operation: "BatchExecuteStatement", protocol: "json1.0",
+			host: "dynamodb.us-east-1.amazonaws.com", service: "dynamodb", signingService: "dynamodb", region: "us-east-1", endpointRegion: "us-east-1", signingRegion: "us-east-1", operation: "BatchExecuteStatement", protocol: "json1.0",
 			method: http.MethodPost, path: "/", contentType: "application/x-amz-json-1.0", target: "DynamoDB_20120810.BatchExecuteStatement", body: `{"Statements":[{"Statement":"SELECT * FROM \"read_table\""},{"Statement":"INSERT INTO \"write_table\" VALUE {'id': '1'}"}]}`, wantStatus: http.StatusOK,
+		},
+		"GetAccount": {
+			host: "apigateway.us-east-1.amazonaws.com", service: "apigateway", signingService: "apigateway", region: "us-east-1", endpointRegion: "us-east-1", signingRegion: "us-east-1", operation: "GetAccount", protocol: "rest-json",
+			method: http.MethodGet, path: "/account", contentType: "application/json", wantStatus: http.StatusForbidden, wantReason: "mapping_low_confidence",
+		},
+		"DescribeRepositories": {
+			host: "api.ecr.us-east-1.amazonaws.com", service: "api.ecr", signingService: "ecr", region: "us-east-1", endpointRegion: "us-east-1", signingRegion: "us-east-1", operation: "DescribeRepositories", protocol: "json1.1",
+			method: http.MethodPost, path: "/", contentType: "application/x-amz-json-1.1", target: "AmazonEC2ContainerRegistry_V20150921.DescribeRepositories", body: `{"repositoryNames":["fixture"]}`, wantStatus: http.StatusForbidden, wantReason: "resource_unresolved",
+		},
+		"ListDistributions": {
+			host: "cloudfront.amazonaws.com", service: "cloudfront", signingService: "cloudfront", region: "us-east-1", endpointRegion: "", signingRegion: "us-east-1", operation: "ListDistributions", protocol: "rest-xml",
+			method: http.MethodGet, path: "/2016-08-20/distribution", contentType: "application/xml", wantStatus: http.StatusForbidden, wantReason: "unknown_operation",
+		},
+		"ListAccessPoints": {
+			host: "123456789012.s3-control.us-east-1.amazonaws.com", service: "s3-control", signingService: "s3", region: "us-east-1", endpointRegion: "us-east-1", signingRegion: "us-east-1", operation: "ListAccessPoints", protocol: "rest-xml",
+			method: http.MethodGet, path: "/v20180820/accesspoint?accountId=123456789012", contentType: "application/xml", wantStatus: http.StatusForbidden, wantReason: "unknown_operation",
 		},
 	}
 }
@@ -112,15 +138,18 @@ func TestCatalogOperations(t *testing.T) {
 			if !ok {
 				t.Fatalf("fixture %q operation %q has no production request", fixture.Name, fixture.ExpectedOperation)
 			}
-			if fixture.Source == "" || fixture.SourceURL == "" {
-				t.Fatalf("fixture %q source attribution is incomplete", fixture.Name)
+			if fixture.Source == "" || fixture.SourceURL == "" || fixture.ModelIdentifier == "" || fixture.APIService == "" || fixture.SigningService == "" || fixture.SigningRegion == "" || fixture.ExpectedProtocol == "" || fixture.EndpointStatus == "" || fixture.MappingStatus == "" {
+				t.Fatalf("fixture %q attribution or identity metadata is incomplete", fixture.Name)
 			}
-			if tc.service != fixture.ExpectedService || tc.protocol != fixture.ExpectedProtocol {
-				t.Fatalf("fixture %q identity = %s/%s, want %s/%s", fixture.Name, fixture.ExpectedService, fixture.ExpectedProtocol, tc.service, tc.protocol)
+			if tc.service != fixture.APIService || tc.signingService != fixture.SigningService || tc.endpointRegion != fixture.EndpointRegion || tc.signingRegion != fixture.SigningRegion || tc.protocol != fixture.ExpectedProtocol {
+				t.Fatalf("fixture %q identity = api=%s signing=%s endpoint-region=%s signing-region=%s/%s, want api=%s signing=%s endpoint-region=%s signing-region=%s/%s", fixture.Name, tc.service, tc.signingService, tc.endpointRegion, tc.signingRegion, tc.protocol, fixture.APIService, fixture.SigningService, fixture.EndpointRegion, fixture.SigningRegion, fixture.ExpectedProtocol)
 			}
 			selected := allowEverythingPolicy(t)
-			h := newCatalogHarness(t, selected, tc.host, tc.service, tc.region)
-			response := h.call(t, tc.host, tc.service, tc.region, tc.method, tc.path, tc.contentType, tc.target, []byte(tc.body))
+			h := newCatalogHarness(t, selected, tc.host, tc.signingService, tc.signingRegion)
+			if h.upstream.Service != fixture.SigningService || h.upstream.Region != fixture.SigningRegion {
+				t.Fatalf("fixture %q fake upstream identity = %s/%s, want signing %s/%s", fixture.Name, h.upstream.Service, h.upstream.Region, fixture.SigningService, fixture.SigningRegion)
+			}
+			response := h.call(t, tc.host, tc.signingService, tc.signingRegion, tc.method, tc.path, tc.contentType, tc.target, []byte(tc.body))
 			responseBody, err := io.ReadAll(response.Body)
 			response.Body.Close()
 			if err != nil {
@@ -131,7 +160,7 @@ func TestCatalogOperations(t *testing.T) {
 			}
 			ledger := h.upstream.Ledger()
 			wantProtocol := fakeProtocol(tc.protocol)
-			if len(ledger) != 0 && (ledger[0].Protocol != wantProtocol || (tc.service != "s3" && ledger[0].Action != tc.operation)) {
+			if len(ledger) != 0 && (ledger[0].Protocol != wantProtocol || (tc.service != "s3" && tc.service != "s3-control" && ledger[0].Action != tc.operation)) {
 				t.Fatalf("%s %s ledger=%+v want one %s", tc.service, tc.operation, ledger, tc.protocol)
 			}
 			if tc.wantStatus == http.StatusOK || tc.wantStatus == http.StatusCreated {
@@ -142,18 +171,29 @@ func TestCatalogOperations(t *testing.T) {
 				t.Fatalf("%s %s denial forwarded: %+v", tc.service, tc.operation, ledger)
 			}
 			event := h.lastDecision(t)
-			if event.Request.Operation != tc.operation || event.Request.Service != tc.service || event.Request.Protocol != awsrequest.AWSProtocol(tc.protocol) {
-				t.Fatalf("audit request=%+v want %s/%s/%s", event.Request, tc.service, tc.operation, tc.protocol)
+			wantOperation := tc.operation
+			if tc.wantReason == "unknown_operation" {
+				wantOperation = "Unknown"
+			}
+			if event.Request.Operation != wantOperation || event.Request.Service != tc.service || event.Request.Protocol != awsrequest.AWSProtocol(tc.protocol) {
+				t.Fatalf("audit request=%+v want api=%s operation=%s protocol=%s", event.Request, tc.service, wantOperation, tc.protocol)
 			}
 			wantDecision := "allow"
 			if tc.wantStatus == http.StatusForbidden {
 				wantDecision = "deny"
 			}
-			if event.Decision.Result != wantDecision {
-				t.Fatalf("audit decision=%+v", event.Decision)
+			if event.Decision.Result != wantDecision || (tc.wantReason != "" && event.Decision.ReasonCode != tc.wantReason) {
+				t.Fatalf("audit decision=%+v want result=%s reason=%s", event.Decision, wantDecision, tc.wantReason)
 			}
 			mapping, mapErr := h.mapper.snapshot()
-			if tc.operation == "CreateFunction" {
+			if tc.wantStatus == http.StatusForbidden && tc.operation != "CreateFunction" {
+				// A classified endpoint is not an operation-support promise. These
+				// representatives intentionally retain the production mapper's
+				// stable denial and, most importantly, never reach the upstream.
+				if mapping == nil && mapErr == nil && tc.wantReason != "unknown_operation" {
+					t.Fatalf("%s denial lost mapper evidence", tc.operation)
+				}
+			} else if tc.operation == "CreateFunction" {
 				// The pinned IAM definition also requires lambda:PassCapacityProvider,
 				// while map.json has no matching extraction record. The vertical path
 				// must therefore reject this request before policy rather than omit a
@@ -476,7 +516,10 @@ func assertCatalogNativeResponse(t *testing.T, protocol string, status int, body
 		}
 	case "rest-xml":
 		if status == http.StatusOK && string(body) != "fixture object" {
-			t.Fatalf("REST-XML GetObject body=%q, want fixture object", body)
+			t.Fatalf("REST-XML success body=%q, want fixture object", body)
+		}
+		if status == http.StatusForbidden && !strings.Contains(string(body), eventID) {
+			t.Fatalf("REST-XML denial body=%q, want event ID %q", body, eventID)
 		}
 	case "json1.0", "rest-json":
 		var document map[string]any
@@ -522,6 +565,17 @@ func assertCatalogDenialResponse(t *testing.T, service, contentType string, body
 		}
 		if err := json.Unmarshal(body, &document); err != nil || !strings.Contains(document.Message, eventID) {
 			t.Fatalf("lambda denial JSON = %q, message = %q, event ID = %q, error = %v", body, document.Message, eventID, err)
+		}
+	default:
+		if strings.Contains(strings.ToLower(contentType), "json") {
+			var document struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(body, &document); err != nil || !strings.Contains(document.Message, eventID) {
+				t.Fatalf("%s denial JSON = %q, message = %q, event ID = %q, error = %v", service, body, document.Message, eventID, err)
+			}
+		} else if !strings.Contains(string(body), eventID) {
+			t.Fatalf("%s denial body = %q, want event ID %q", service, body, eventID)
 		}
 	}
 }
@@ -631,8 +685,11 @@ func newCatalogHarnessWithOptions(
 		protocol := fakeProtocolFromRequest(r)
 		response := fakeaws.CatalogResponse(fakeService(r), operation, protocol, "catalog-request-id")
 		if response.Status == 0 {
-			http.Error(w, "fixture operation unavailable", http.StatusNotImplemented)
-			return
+			// The fake endpoint deliberately has no service-specific response
+			// catalog. A generic protocol-native response still proves that the
+			// production path re-signed this attributed operation and reached the
+			// reviewed upstream identity.
+			response = genericCatalogResponse(protocol, "catalog-request-id")
 		}
 		for key, values := range response.Headers {
 			w.Header()[key] = append([]string(nil), values...)
@@ -765,7 +822,13 @@ func fakeOperation(r *http.Request, body []byte) string {
 			return strings.TrimPrefix(part, "Action=")
 		}
 	}
-	if operation := map[string]string{"/2015-03-31/functions": "CreateFunction"}[r.URL.Path]; operation != "" {
+	if operation := map[string]string{
+		"/2015-03-31/functions":    "CreateFunction",
+		"/account":                 "GetAccount",
+		"/2016-08-20/distribution": "ListDistributions",
+		"/v20180820/accesspoint":   "ListAccessPoints",
+		"/fixture/object.txt":      "GetObject",
+	}[r.URL.Path]; operation != "" {
 		return operation
 	}
 	if strings.HasPrefix(r.Host, "s3") {
@@ -774,16 +837,22 @@ func fakeOperation(r *http.Request, body []byte) string {
 	return ""
 }
 func fakeService(r *http.Request) string {
-	if strings.HasPrefix(r.Host, "iam") {
+	switch {
+	case strings.HasPrefix(r.Host, "iam"):
 		return "iam"
-	}
-	if strings.HasPrefix(r.Host, "s3") {
+	case strings.HasPrefix(r.Host, "s3") || strings.Contains(r.Host, ".s3-control."):
 		return "s3"
-	}
-	if strings.HasPrefix(r.Host, "lambda") {
+	case strings.HasPrefix(r.Host, "lambda"):
 		return "lambda"
+	case strings.HasPrefix(r.Host, "apigateway"):
+		return "apigateway"
+	case strings.HasPrefix(r.Host, "api.ecr"):
+		return "api.ecr"
+	case strings.HasPrefix(r.Host, "cloudfront"):
+		return "cloudfront"
+	default:
+		return "dynamodb"
 	}
-	return "dynamodb"
 }
 func fakeProtocolFromRequest(r *http.Request) fakeaws.Protocol {
 	if strings.HasPrefix(r.Host, "dynamodb") {
@@ -805,3 +874,16 @@ func fakeProtocolFromRequest(r *http.Request) fakeaws.Protocol {
 	return fakeaws.Query
 }
 func fakeProtocol(value string) fakeaws.Protocol { return fakeaws.Protocol(value) }
+
+func genericCatalogResponse(protocol fakeaws.Protocol, requestID string) fakeaws.Response {
+	switch protocol {
+	case fakeaws.Query, fakeaws.EC2Query:
+		return fakeaws.QueryResponse(http.StatusOK, requestID, "Response", "fixture response")
+	case fakeaws.JSON10, fakeaws.JSON11, fakeaws.RESTJSON:
+		return fakeaws.JSONResponse(protocol, http.StatusOK, requestID, map[string]any{"RequestId": requestID})
+	case fakeaws.RESTXML:
+		return fakeaws.Response{Status: http.StatusOK, Headers: http.Header{"Content-Type": {"application/xml"}, "X-Amzn-Requestid": {requestID}}, Body: []byte("fixture object")}
+	default:
+		return fakeaws.Response{Status: http.StatusInternalServerError, Headers: http.Header{"Content-Type": {"text/plain"}, "X-Amzn-Requestid": {requestID}}, Body: []byte("unsupported fixture protocol")}
+	}
+}

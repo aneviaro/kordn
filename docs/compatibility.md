@@ -23,10 +23,17 @@ not need the checkout or submodule.
 | Corporate authenticated parent relay, reconnect, opaque TLS/chunks | local relay tests | Linux amd64, macOS arm64 |
 | Adversarial auth/lookalike/killed proxy | local relay tests | Linux amd64, macOS arm64 |
 
-The supported producer boundary is still the positive endpoint classifier. IAM
-XML/Query denials remain protocol-native with stable reason/event identifiers;
-unsupported, ambiguous, or unresolved catalog evidence is denied locally and is
-never forwarded upstream.
+The supported producer boundary is still the positive endpoint classifier;
+family-level endpoint coverage and its explicit operation-evidence count are
+published in [`docs/aws-endpoint-coverage.md`](aws-endpoint-coverage.md).
+Classification alone is not producer compatibility: compatibility is the
+intersection of endpoint classification, SigV4 authentication, protocol and
+operation decoding, complete IAM mapping, policy, audit, and supported request
+form. IAM XML/Query denials remain protocol-native with stable reason/event
+identifiers; unsupported, ambiguous, or unresolved catalog evidence is denied
+locally and is never forwarded upstream. Generic catalog-derived family
+classification must not be read as individually verified compatibility for all
+catalog services or operations.
 
 Performance is a measured release gate, not a compatibility promise. For a
 focused local catalog smoke test, run `make benchmark-hotpath`; it requires the

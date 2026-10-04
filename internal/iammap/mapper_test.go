@@ -174,6 +174,36 @@ func TestNoScopeWidening(t *testing.T) {
 		t.Fatalf("ECS multiset disagreement was not fail-closed: %v %+v", e, x)
 	}
 }
+func TestEndpointClassificationDoesNotWidenMappingEvidence(t *testing.T) {
+	m, err := NewMapper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		service   string
+		host      string
+		region    string
+		operation string
+		params    map[string]awsrequest.Value
+	}{
+		{"absent operation", "acm", "acm.us-east-1.amazonaws.com", "us-east-1", "NoSuchOperation", nil},
+		{"incomplete resource mapping", "sqs", "sqs.us-east-1.amazonaws.com", "us-east-1", "SendMessage", map[string]awsrequest.Value{"QueueUrl": str("https://sqs.us-east-1.amazonaws.com/123456789012/orders")}},
+		{"ambiguous static evidence", "ecs", "ecs.us-east-1.amazonaws.com", "us-east-1", "RunTask", map[string]awsrequest.Value{"TaskDefinition": str("web"), "TaskRoleArn": str("arn:aws:iam::123456789012:role/task")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if endpoint, err := awsrequest.DefaultEndpointClassifier.Classify(tc.host); err != nil || endpoint.Service != tc.service {
+				t.Fatalf("catalog endpoint was not positively classified: %+v %v", endpoint, err)
+			}
+			mapped, err := m.Map(context.Background(), goldenRequest(tc.service, tc.host, tc.region, tc.operation, tc.params))
+			if err == nil || mapped != nil {
+				t.Fatalf("endpoint success widened %s mapping evidence: result=%+v err=%v", tc.name, mapped, err)
+			}
+		})
+	}
+}
+
 func TestMapperCancellationStopsCooperativeWork(t *testing.T) {
 	active := &atomic.Int32{}
 	entered := make(chan struct{}, 1)

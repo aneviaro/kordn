@@ -152,15 +152,7 @@ func AttachDecodeFailureEvidence(err error, evidence DecodeFailureEvidence) erro
 }
 
 func validEvidenceService(value string) bool {
-	if value == "" || len(value) > 128 {
-		return false
-	}
-	for _, r := range value {
-		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
-			return false
-		}
-	}
-	return true
+	return len(value) <= 128 && validateEndpointService(value) == nil
 }
 func validEvidenceOperation(value string) bool { return len(value) <= 128 && validOperation(value) }
 
@@ -179,6 +171,9 @@ func (r VerifiedRequest) Validate() error {
 	}
 	if r.SigningRegion == "" || r.SigningService == "" {
 		return errors.New("signing Region and service are required")
+	}
+	if r.Endpoint.SigningService != "" && (r.SigningService != r.Endpoint.SigningService || r.SigningRegion != r.Endpoint.SigningRegion) {
+		return errors.New("authenticated signing identity disagrees with endpoint")
 	}
 	if !r.PayloadMode.Valid() {
 		return fmt.Errorf("unsupported payload mode %q", r.PayloadMode)
@@ -413,10 +408,18 @@ func (m MappingResult) Validate() error {
 // verification and before IAM mapping. Headers are runtime data and must be
 // redacted before any audit serialization.
 type DecodedAWSRequest struct {
-	Partition       string           `json:"partition"`
-	EndpointHost    string           `json:"endpoint_host"`
+	Partition    string `json:"partition"`
+	EndpointHost string `json:"endpoint_host"`
+	// Service is the API/catalog endpoint prefix. Signing identity is retained
+	// independently so later stages cannot substitute an IAM namespace.
 	Service         string           `json:"service"`
+	SigningService  string           `json:"signing_service,omitempty"`
+	SigningRegion   string           `json:"signing_region,omitempty"`
 	Region          string           `json:"region"`
+	Scope           EndpointScope    `json:"scope,omitempty"`
+	FIPS            bool             `json:"fips,omitempty"`
+	DualStack       bool             `json:"dualstack,omitempty"`
+	AccountID       string           `json:"account_id,omitempty"`
 	CallerAccountID string           `json:"caller_account_id"`
 	Protocol        AWSProtocol      `json:"protocol"`
 	Operation       string           `json:"operation"`
@@ -436,7 +439,7 @@ func (r DecodedAWSRequest) Validate() error {
 	if strings.TrimSpace(r.Partition) == "" || strings.TrimSpace(r.EndpointHost) == "" || strings.TrimSpace(r.Service) == "" || strings.TrimSpace(r.Operation) == "" {
 		return errors.New("decoded request endpoint, service, and operation are required")
 	}
-	endpoint := AWSEndpoint{Partition: r.Partition, Host: r.EndpointHost, Service: r.Service, Region: r.Region, Global: r.Region == ""}
+	endpoint := AWSEndpoint{Partition: r.Partition, Host: r.EndpointHost, Service: r.Service, SigningService: r.SigningService, SigningRegion: r.SigningRegion, Region: r.Region, Global: r.Region == "", Scope: r.Scope, FIPS: r.FIPS, DualStack: r.DualStack, AccountID: r.AccountID}
 	if err := endpoint.Validate(); err != nil {
 		return fmt.Errorf("endpoint: %w", err)
 	}

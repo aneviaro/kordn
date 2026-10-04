@@ -1005,7 +1005,7 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 		s.finishAuthenticationFailure(w, req, endpoint, runID, verifyReason(err))
 		return
 	}
-	if verified == nil || verified.Validate() != nil || verified.Endpoint.Host != endpoint.Host || verified.Endpoint.Service != endpoint.Service || verified.Endpoint.Partition != endpoint.Partition {
+	if verified == nil || verified.Validate() != nil || !awsrequest.SameEndpoint(verified.Endpoint, endpoint) {
 		s.finishAuthenticationFailure(w, req, endpoint, runID, "invalid_inbound_signature")
 		return
 	}
@@ -1024,7 +1024,7 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 		s.finishFailedPipeline(w, req, endpoint, runID, started, "unknown_operation", "decode", err, pipelineFailureEvidence{decode: safeDecodeFailureEvidence(err, endpoint, verified.Protocol)})
 		return
 	}
-	if err = decoded.Validate(); err != nil || decoded.EndpointHost != endpoint.Host || decoded.Service != endpoint.Service || decoded.Partition != endpoint.Partition {
+	if err = decoded.Validate(); err != nil || !awsrequest.SameEndpoint(decodedEndpoint(decoded), endpoint) {
 		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "decode", err, pipelineFailureEvidence{})
 		return
 	}
@@ -1139,6 +1139,13 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 		s.respondPipelineDeny(w, endpoint, decoded, "upstream_credential_unavailable", eventID)
 		return
 	}
+	// Re-bind the complete identity immediately before the irreversible
+	// upstream boundary. This protects against a decoder or policy seam that
+	// returns an endpoint-shaped value with one field substituted.
+	if !awsrequest.SameEndpoint(decodedEndpoint(decoded), endpoint) || !awsrequest.SameEndpoint(verified.Endpoint, endpoint) {
+		s.finishFailedPipeline(w, req, endpoint, runID, started, "internal_fail_closed", "forward", nil, pipelineFailureEvidence{decoded: decoded})
+		return
+	}
 	outgoing, err := s.config.Resigner.Resign(ctx, verified.Request, endpoint)
 	if err != nil {
 		s.metrics.Inc("upstream.credential_failure")
@@ -1187,6 +1194,18 @@ func (s *Server) handlePipeline(w http.ResponseWriter, req *http.Request, dest d
 }
 
 // ioCopy is kept as a small seam to keep pipeline response handling explicit.
+func decodedEndpoint(r *awsrequest.DecodedAWSRequest) awsrequest.AWSEndpoint {
+	if r == nil {
+		return awsrequest.AWSEndpoint{}
+	}
+	return awsrequest.AWSEndpoint{
+		Partition: r.Partition, Host: r.EndpointHost, Service: r.Service,
+		SigningService: r.SigningService, SigningRegion: r.SigningRegion,
+		Region: r.Region, Scope: r.Scope, Global: r.Region == "", FIPS: r.FIPS,
+		DualStack: r.DualStack, AccountID: r.AccountID,
+	}
+}
+
 func ioCopy(dst http.ResponseWriter, src interface{ Read([]byte) (int, error) }) (int64, error) {
 	return copyResponse(dst, src)
 }

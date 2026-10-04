@@ -11,7 +11,7 @@ Every normative item has a stable ID and a concrete executable check. `make chec
 | S20-05 | child never receives real credentials | `TestSecurityExplicitDirectAndCredentialFileLimitations and runtime tests` |
 | S20-06 | real credentials never written to managed disk | `TestSecurityRealProxyRejectsBadStaleAndForwardsAllowed and fakeaws ledger tests` |
 | S20-07 | fake auth headers never forwarded upstream | `fakeaws protocol tests and security integration` |
-| S20-08 | unknown endpoint/operation/resource/dependency/protocol/payload/signing fails closed | `internal/proxy, awsrequest, iammap, policy and sigv4 tests` |
+| S20-08 | unknown endpoint/operation/resource/dependency/protocol/payload/signing fails closed; endpoint/API/signing/IAM identities cannot be conflated | `internal/proxy real opaque/lookalike/host-mismatch/no-upstream tests; internal/awsrequest Tier 1 catalog/identity tests; iammap/policy/sigv4 tests; docs/aws-endpoint-coverage.md` |
 | S20-09 | all mapped IAM requirements allowed conjunctively | `policy engine tests and TestSecurityRealProxyDeniesBeforeUpstream` |
 | S20-10 | known AWS wildcard distinct from unresolved scope | `iammap golden and policy scope tests` |
 | S20-11 | explicit deny overrides allow | `policy tests TestRuleOrderInvariant` |

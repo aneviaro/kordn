@@ -484,6 +484,28 @@ func (c *Catalog) compactWireOperation(index int) (WireOperation, bool) {
 	return operation, true
 }
 
+// ServiceIdentities returns only endpoint and signing evidence. Unlike
+// Services, it does not reconstruct operation, route, or mapping views.
+func (c *Catalog) ServiceIdentities() []ServiceIdentity {
+	if c == nil || c.store == nil {
+		return nil
+	}
+	out := make([]ServiceIdentity, 0, len(c.store.services))
+	for i := range c.store.services {
+		service := c.store.services[i]
+		endpoint, ok := compactString(c.store, service.endpoint)
+		if !ok {
+			return nil
+		}
+		signing, ok := compactString(c.store, service.signing)
+		if !ok {
+			return nil
+		}
+		out = append(out, ServiceIdentity{EndpointPrefix: endpoint, SigningName: signing})
+	}
+	return out
+}
+
 func (c *Catalog) Services() []Service {
 	if c == nil || c.store == nil {
 		return nil

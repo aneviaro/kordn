@@ -29,14 +29,23 @@ const (
 // normalized DNS host used for CONNECT and inner-Host agreement checks; it is
 // not a suffix or a user-provided display label.
 type AWSEndpoint struct {
-	Partition string        `json:"partition"`
-	Host      string        `json:"host"`
-	Service   string        `json:"service"`
+	Partition string `json:"partition"`
+	Host      string `json:"host"`
+	// Service is the exact API/catalog endpoint prefix. It is deliberately
+	// independent from the SigV4 credential scope service.
+	Service        string `json:"service"`
+	SigningService string `json:"signing_service"`
+	SigningRegion  string `json:"signing_region"`
+	// Region is the observed regional host identity. It is empty for global
+	// endpoints, even when SigningRegion is non-empty.
 	Region    string        `json:"region"`
 	Global    bool          `json:"global"`
 	Scope     EndpointScope `json:"scope,omitempty"`
 	FIPS      bool          `json:"fips,omitempty"`
 	DualStack bool          `json:"dualstack,omitempty"`
+	// AccountID is typed evidence extracted from an approved account-labelled
+	// host, not caller identity and never a substitute for it.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 func (e AWSEndpoint) IsGlobal() bool { return e.Global || e.Scope == ScopeGlobal }
@@ -74,8 +83,23 @@ func (e AWSEndpoint) Validate() error {
 			}
 		}
 	}
-	if strings.TrimSpace(e.Service) == "" {
-		return errors.New("endpoint service is required")
+	if err := validateEndpointService(e.Service); err != nil {
+		return fmt.Errorf("endpoint service: %w", err)
+	}
+	if e.SigningService != "" && !validSigningIdentity(e.SigningService) {
+		return errors.New("endpoint signing service is invalid")
+	}
+	if e.SigningRegion != "" && !validSigningRegion(e.SigningRegion) {
+		return errors.New("endpoint signing Region is invalid")
+	}
+	if e.SigningService != "" && e.SigningRegion == "" {
+		return errors.New("endpoint signing Region is required with signing service")
+	}
+	if e.SigningRegion != "" && e.SigningService == "" {
+		return errors.New("endpoint signing service is required with signing Region")
+	}
+	if err := validateEndpointAccountID(e.AccountID); err != nil {
+		return err
 	}
 	if e.Scope != "" && e.Scope != ScopeRegional && e.Scope != ScopeGlobal {
 		return fmt.Errorf("unsupported endpoint scope %q", e.Scope)
@@ -86,8 +110,97 @@ func (e AWSEndpoint) Validate() error {
 	if !e.IsGlobal() && strings.TrimSpace(e.Region) == "" {
 		return errors.New("regional endpoint Region is required")
 	}
+	if e.IsGlobal() && e.Region != "" {
+		return errors.New("global endpoint Region must be empty")
+	}
+	if e.SigningService != "" && !e.IsGlobal() && e.SigningRegion != e.Region {
+		return errors.New("regional endpoint signing Region disagrees with endpoint Region")
+	}
 	return nil
 }
+
+func validateEndpointService(value string) error {
+	if value == "" || len(value) > 253 || value != strings.ToLower(value) {
+		return errors.New("must be a lowercase DNS-like API prefix")
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return errors.New("must contain non-empty DNS-like labels")
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' {
+				return errors.New("must contain only ASCII DNS-like labels")
+			}
+		}
+	}
+	return nil
+}
+
+func validSigningIdentity(value string) bool {
+	return ValidateSigningService(value) == nil
+}
+
+// ValidateSigningService validates the bounded SigV4 service-scope identity.
+// AWS service scopes use bounded safe dotted labels and may preserve catalog case.
+func ValidateSigningService(value string) error {
+	if value == "" || len(value) > 128 {
+		return errors.New("signing service must be non-empty and bounded")
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return errors.New("signing service must contain non-empty DNS-like labels")
+		}
+		for _, r := range label {
+			if !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' {
+				return errors.New("signing service contains unsupported syntax")
+			}
+		}
+	}
+	return nil
+}
+
+func validSigningRegion(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateEndpointAccountID(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) != 12 {
+		return errors.New("endpoint account ID must be exactly 12 ASCII digits")
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return errors.New("endpoint account ID must be exactly 12 ASCII digits")
+		}
+	}
+	return nil
+}
+
+// EndpointIdentityEqual compares every classifier identity dimension. Empty
+// signing fields are accepted only for compatibility with pre-identity
+// contracts; classified endpoints always carry them explicitly.
+func EndpointIdentityEqual(a, b AWSEndpoint) bool {
+	serviceMatch := a.SigningService == "" || b.SigningService == "" || a.SigningService == b.SigningService
+	regionMatch := a.SigningRegion == "" || b.SigningRegion == "" || a.SigningRegion == b.SigningRegion
+	return a.Partition == b.Partition && a.Host == b.Host && a.Service == b.Service &&
+		a.Region == b.Region && a.EffectiveScope() == b.EffectiveScope() &&
+		a.FIPS == b.FIPS && a.DualStack == b.DualStack && a.AccountID == b.AccountID &&
+		serviceMatch && regionMatch
+}
+
+// SameEndpoint is the concise package-native identity comparison used by
+// decoders, mappers, and the proxy stage boundary.
+func SameEndpoint(a, b AWSEndpoint) bool { return EndpointIdentityEqual(a, b) }
 
 // EndpointClassifier positively classifies a normalized host. Unknown,
 // custom, and unsupported-partition hosts must be returned as errors; there is
@@ -171,6 +284,7 @@ func NormalizeEndpointHost(authority string) (string, int, error) {
 type Classifier struct {
 	positive *cache.LRU[string, AWSEndpoint]
 	negative *cache.LRU[string, struct{}]
+	catalog  *EndpointIdentityIndex
 	mu       sync.Mutex
 }
 
@@ -178,6 +292,17 @@ type Classifier struct {
 // selects a conservative default; capacities are shared by positive and
 // negative caches.
 func NewClassifier(capacity int) (*Classifier, error) {
+	index, err := loadEndpointIdentityIndex()
+	if err != nil {
+		return nil, err
+	}
+	return newClassifier(index, capacity)
+}
+
+func newClassifier(index *EndpointIdentityIndex, capacity int) (*Classifier, error) {
+	if index == nil || len(index.families) == 0 {
+		return nil, errors.New("endpoint identity index is unavailable")
+	}
 	if capacity <= 0 {
 		capacity = 256
 	}
@@ -189,7 +314,7 @@ func NewClassifier(capacity int) (*Classifier, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Classifier{positive: positive, negative: negative}, nil
+	return &Classifier{positive: positive, negative: negative, catalog: index}, nil
 }
 
 // NewCommercialClassifier is a descriptive alias for NewClassifier.
@@ -257,7 +382,7 @@ func (c *Classifier) Classify(authority string) (AWSEndpoint, error) {
 	if _, ok := c.negative.Get(host); ok {
 		return AWSEndpoint{}, errors.New("unsupported AWS endpoint")
 	}
-	endpoint, ok := classifyCommercialHost(host)
+	endpoint, ok := classifyCommercialHost(host, c.catalog.families)
 	if !ok {
 		c.negative.Put(host, struct{}{})
 		return AWSEndpoint{}, errors.New("unsupported AWS endpoint")
@@ -303,91 +428,27 @@ const (
 	shapeGlobal
 	shapeGlobalFIPSLabel
 	shapeGlobalFIPSSuffix
+	shapeRegionalGlobal
+	shapeAccountRegional
+	shapeAccountRegionalDualStack
 )
 
-// endpointFamily is a reviewed, positive catalog entry. DNSPrefix is kept
-// separate from Service because AWS DNS names are not service identifiers in
-// general (for example, CloudWatch uses monitoring). Shapes are exact host
-// label layouts; they are not inferred from a service name or a suffix.
+// endpointFamily is a reviewed, positive catalog entry. Service is the exact
+// API/catalog prefix while SigningService is the independent SigV4 identity.
+// Shapes are exact host label layouts; they are not inferred from a service
+// name or a suffix.
 type endpointFamily struct {
-	DNSPrefix string
-	Service   string
-	Shapes    endpointShape
+	DNSPrefix      string
+	Service        string
+	SigningService string
+	SigningRegion  string
+	Shapes         endpointShape
+	AccountLabel   bool
 }
 
 const regionalShapes = shapeRegional | shapeRegionalFIPS | shapeRegionalDualStack | shapeRegionalFIPSDualStack | shapeRegionalAPIAWS | shapeRegionalFIPSAPIAWS
 
-// commercialEndpointCatalog is deliberately small. Adding an AWS service or
-// endpoint variant requires an explicit entry and a fixture; an AWS-looking
-// hostname that is not in this table is not classified.
-var commercialEndpointCatalog = map[string]endpointFamily{
-	"sts": {
-		DNSPrefix: "sts", Service: "sts",
-		Shapes: regionalShapes | shapeGlobal | shapeGlobalFIPSLabel | shapeGlobalFIPSSuffix,
-	},
-	"iam": {
-		DNSPrefix: "iam", Service: "iam",
-		Shapes: shapeGlobal | shapeGlobalFIPSLabel | shapeGlobalFIPSSuffix,
-	},
-	"s3": {
-		DNSPrefix: "s3", Service: "s3",
-		Shapes: regionalShapes | shapeGlobal,
-	},
-	"ec2": {
-		DNSPrefix: "ec2", Service: "ec2",
-		Shapes: regionalShapes | shapeRegionalFIPSLabel | shapeRegionalFIPSLabelDualStack,
-	},
-	"ecs": {
-		DNSPrefix: "ecs", Service: "ecs",
-		Shapes: regionalShapes,
-	},
-	"monitoring": {
-		DNSPrefix: "monitoring", Service: "cloudwatch",
-		Shapes: regionalShapes,
-	},
-	"logs": {
-		DNSPrefix: "logs", Service: "logs",
-		Shapes: regionalShapes,
-	},
-	"lambda": {
-		DNSPrefix: "lambda", Service: "lambda",
-		Shapes: regionalShapes,
-	},
-	"dynamodb": {
-		DNSPrefix: "dynamodb", Service: "dynamodb",
-		Shapes: regionalShapes,
-	},
-	"kms": {
-		DNSPrefix: "kms", Service: "kms",
-		Shapes: regionalShapes,
-	},
-	"sqs": {
-		DNSPrefix: "sqs", Service: "sqs",
-		Shapes: regionalShapes,
-	},
-	"sns": {
-		DNSPrefix: "sns", Service: "sns",
-		Shapes: regionalShapes,
-	},
-	"events": {
-		DNSPrefix: "events", Service: "events",
-		Shapes: regionalShapes,
-	},
-	"cloudformation": {
-		DNSPrefix: "cloudformation", Service: "cloudformation",
-		Shapes: regionalShapes,
-	},
-	"route53": {
-		DNSPrefix: "route53", Service: "route53",
-		Shapes: shapeGlobal | shapeGlobalFIPSLabel | shapeGlobalFIPSSuffix,
-	},
-	"organizations": {
-		DNSPrefix: "organizations", Service: "organizations",
-		Shapes: regionalShapes | shapeGlobal | shapeGlobalFIPSLabel | shapeGlobalFIPSSuffix,
-	},
-}
-
-func classifyCommercialHost(host string) (AWSEndpoint, bool) {
+func classifyCommercialHost(host string, families map[string]endpointFamily) (AWSEndpoint, bool) {
 	labels := strings.Split(host, ".")
 	if len(labels) < 3 {
 		return AWSEndpoint{}, false
@@ -407,29 +468,31 @@ func classifyCommercialHost(host string) (AWSEndpoint, bool) {
 	}
 
 	if suffix == "api.aws" {
-		return classifyAPIAWSEndpoint(host, body)
+		return classifyAPIAWSEndpoint(host, body, families)
 	}
-	return classifyAmazonAWSEndpoint(host, body)
+	return classifyAmazonAWSEndpoint(host, body, families)
 }
 
-func classifyAPIAWSEndpoint(host string, body []string) (AWSEndpoint, bool) {
-	// The commercial api.aws catalog uses service[ -fips ].region.api.aws.
-	// api.aws is itself the dual-stack form, so a second dualstack label is
-	// not accepted.
-	if len(body) != 2 {
+func classifyAPIAWSEndpoint(host string, body []string, families map[string]endpointFamily) (AWSEndpoint, bool) {
+	// api.aws is the dual-stack regional profile. Both the catalog prefix and
+	// its optional -fips spelling may contain multiple DNS labels.
+	if len(body) < 2 {
 		return AWSEndpoint{}, false
 	}
-	prefix, fips := body[0], false
-	if strings.HasSuffix(prefix, "-fips") {
-		fips = true
-		prefix = strings.TrimSuffix(prefix, "-fips")
-	}
-	family, ok := commercialEndpointCatalog[prefix]
-	if !ok || family.DNSPrefix != prefix {
-		return AWSEndpoint{}, false
-	}
-	region := body[1]
+	region := body[len(body)-1]
 	if !validCommercialRegion(region) {
+		return AWSEndpoint{}, false
+	}
+	prefixLabels := body[:len(body)-1]
+	fips := false
+	if len(prefixLabels) > 0 && strings.HasSuffix(prefixLabels[len(prefixLabels)-1], "-fips") {
+		fips = true
+		prefixLabels = append([]string(nil), prefixLabels...)
+		prefixLabels[len(prefixLabels)-1] = strings.TrimSuffix(prefixLabels[len(prefixLabels)-1], "-fips")
+	}
+	prefix := strings.Join(prefixLabels, ".")
+	family, ok := families[prefix]
+	if !ok || family.DNSPrefix != prefix {
 		return AWSEndpoint{}, false
 	}
 	shape := shapeRegionalAPIAWS
@@ -442,69 +505,116 @@ func classifyAPIAWSEndpoint(host string, body []string) (AWSEndpoint, bool) {
 	return awsEndpoint(family, host, region, false, fips, true), true
 }
 
-func classifyAmazonAWSEndpoint(host string, body []string) (AWSEndpoint, bool) {
-	var family endpointFamily
-	var prefix string
-	var region string
-	var shape endpointShape
-	fips, dualstack, global := false, false, false
-
-	switch len(body) {
-	case 1:
-		// service.amazonaws.com is a global endpoint. Only a catalogued
-		// family may claim this shape. The -fips spelling is a separate
-		// explicit global shape, not a generic service-name modifier.
-		prefix, global, shape = body[0], true, shapeGlobal
-		if strings.HasSuffix(prefix, "-fips") {
-			prefix, fips, shape = strings.TrimSuffix(prefix, "-fips"), true, shapeGlobalFIPSSuffix
-		}
-	case 2:
-		switch {
-		case body[0] == "fips":
-			// fips.service.amazonaws.com is the explicit global FIPS form.
-			prefix, fips, global, shape = body[1], true, true, shapeGlobalFIPSLabel
-		case strings.HasSuffix(body[0], "-fips"):
-			// service-fips.region.amazonaws.com is the regional FIPS form.
-			prefix, region, fips, shape = strings.TrimSuffix(body[0], "-fips"), body[1], true, shapeRegionalFIPS
-		default:
-			prefix, region, shape = body[0], body[1], shapeRegional
-		}
-	case 3:
-		switch {
-		case body[0] == "fips":
-			// fips.service.region.amazonaws.com is retained only for
-			// families that explicitly list this legacy shape.
-			prefix, region, fips, shape = body[1], body[2], true, shapeRegionalFIPSLabel
-		case strings.HasSuffix(body[0], "-fips") && body[1] == "dualstack":
-			prefix, region, fips, dualstack, shape = strings.TrimSuffix(body[0], "-fips"), body[2], true, true, shapeRegionalFIPSDualStack
-		case body[1] == "dualstack":
-			prefix, region, dualstack, shape = body[0], body[2], true, shapeRegionalDualStack
-		default:
-			return AWSEndpoint{}, false
-		}
-	case 4:
-		// Keep the legacy FIPS label form explicit as well; it is not
-		// inferred for every service family.
-		if body[0] != "fips" || body[2] != "dualstack" {
-			return AWSEndpoint{}, false
-		}
-		prefix, region, fips, dualstack, shape = body[1], body[3], true, true, shapeRegionalFIPSLabelDualStack
-	default:
-		return AWSEndpoint{}, false
+func classifyAmazonAWSEndpoint(host string, body []string, families map[string]endpointFamily) (AWSEndpoint, bool) {
+	// Global forms consume the complete catalog prefix, so multi-label
+	// prefixes remain exact matches rather than becoming arbitrary subdomains.
+	if endpoint, ok := classifyGlobalAmazonEndpoint(host, body, families); ok {
+		return endpoint, true
 	}
 
-	family, ok := commercialEndpointCatalog[prefix]
+	// Account-qualified forms are deliberately opt-in metadata (currently S3
+	// Control). A numeric label is never treated as a generic service prefix.
+	if len(body) > 1 && validAccountLabel(body[0]) {
+		if endpoint, ok := classifyRegionalAmazonBody(host, body[1:], families, body[0]); ok {
+			return endpoint, true
+		}
+	}
+	return classifyRegionalAmazonBody(host, body, families, "")
+}
+
+func classifyGlobalAmazonEndpoint(host string, body []string, families map[string]endpointFamily) (AWSEndpoint, bool) {
+	if len(body) == 0 {
+		return AWSEndpoint{}, false
+	}
+	prefixLabels := append([]string(nil), body...)
+	fips, shape := false, shapeGlobal
+	if prefixLabels[0] == "fips" {
+		if len(prefixLabels) == 1 {
+			return AWSEndpoint{}, false
+		}
+		prefixLabels = prefixLabels[1:]
+		fips, shape = true, shapeGlobalFIPSLabel
+	} else if strings.HasSuffix(prefixLabels[len(prefixLabels)-1], "-fips") {
+		prefixLabels[len(prefixLabels)-1] = strings.TrimSuffix(prefixLabels[len(prefixLabels)-1], "-fips")
+		fips, shape = true, shapeGlobalFIPSSuffix
+	}
+	prefix := strings.Join(prefixLabels, ".")
+	family, ok := families[prefix]
 	if !ok || family.DNSPrefix != prefix || family.Shapes&shape == 0 {
 		return AWSEndpoint{}, false
 	}
-	if !global {
-		if !validCommercialRegion(region) {
+	return awsEndpoint(family, host, "", true, fips, false), true
+}
+
+func classifyRegionalAmazonBody(host string, body []string, families map[string]endpointFamily, account string) (AWSEndpoint, bool) {
+	if len(body) < 2 {
+		return AWSEndpoint{}, false
+	}
+	region := body[len(body)-1]
+	if !validCommercialRegion(region) {
+		return AWSEndpoint{}, false
+	}
+
+	// A reviewed regional-looking global endpoint is parsed before the generic
+	// profile and never exposes the hostname's region as endpoint scope.
+	if family, ok := families[strings.Join(body[:len(body)-1], ".")]; ok && family.Shapes&shapeRegionalGlobal != 0 {
+		// Account-qualified hosts are an explicit shape override, not a
+		// generic prefix. Never let a numeric label turn a regional-looking
+		// global service (for example ce) into an account-qualified endpoint.
+		if account != "" {
 			return AWSEndpoint{}, false
 		}
-	} else {
-		region = ""
+		return awsEndpointWithAccount(family, host, "", true, false, false, ""), true
 	}
-	return awsEndpoint(family, host, region, global, fips, dualstack), true
+
+	prefixLabels := body[:len(body)-1]
+	shape := shapeRegional
+	fips, dualstack := false, false
+	switch {
+	case len(prefixLabels) >= 2 && prefixLabels[len(prefixLabels)-1] == "dualstack":
+		dualstack = true
+		shape = shapeRegionalDualStack
+		prefixLabels = prefixLabels[:len(prefixLabels)-1]
+		if len(prefixLabels) > 0 && prefixLabels[0] == "fips" {
+			prefixLabels = prefixLabels[1:]
+			fips, shape = true, shapeRegionalFIPSLabelDualStack
+		} else if len(prefixLabels) > 0 && strings.HasSuffix(prefixLabels[len(prefixLabels)-1], "-fips") {
+			prefixLabels[len(prefixLabels)-1] = strings.TrimSuffix(prefixLabels[len(prefixLabels)-1], "-fips")
+			fips, shape = true, shapeRegionalFIPSDualStack
+		}
+	case len(prefixLabels) > 0 && prefixLabels[0] == "fips":
+		fips, shape = true, shapeRegionalFIPSLabel
+		prefixLabels = prefixLabels[1:]
+	case len(prefixLabels) > 0 && strings.HasSuffix(prefixLabels[len(prefixLabels)-1], "-fips"):
+		fips, shape = true, shapeRegionalFIPS
+		prefixLabels[len(prefixLabels)-1] = strings.TrimSuffix(prefixLabels[len(prefixLabels)-1], "-fips")
+	}
+	prefix := strings.Join(prefixLabels, ".")
+	if account != "" {
+		// Account-qualified forms are a separate reviewed shape family. They
+		// must not inherit ordinary regional or FIPS acceptance from the
+		// service profile.
+		if fips {
+			return AWSEndpoint{}, false
+		}
+		if dualstack {
+			shape = shapeAccountRegionalDualStack
+		} else {
+			shape = shapeAccountRegional
+		}
+	}
+	family, ok := families[prefix]
+	if !ok || family.DNSPrefix != prefix || family.Shapes&shape == 0 {
+		return AWSEndpoint{}, false
+	}
+	if account != "" && !family.AccountLabel {
+		return AWSEndpoint{}, false
+	}
+	return awsEndpointWithAccount(family, host, region, false, fips, dualstack, account), true
+}
+
+func validAccountLabel(value string) bool {
+	return len(value) == 12 && validateEndpointAccountID(value) == nil
 }
 
 func validCommercialRegion(region string) bool {
@@ -512,15 +622,28 @@ func validCommercialRegion(region string) bool {
 }
 
 func awsEndpoint(family endpointFamily, host, region string, global, fips, dualstack bool) AWSEndpoint {
+	return awsEndpointWithAccount(family, host, region, global, fips, dualstack, "")
+}
+
+func awsEndpointWithAccount(family endpointFamily, host, region string, global, fips, dualstack bool, account string) AWSEndpoint {
+	signingRegion := family.SigningRegion
+	if !global {
+		// Family-level signing-region overrides describe global endpoints only.
+		// Regional endpoints always sign in the region parsed from their host.
+		signingRegion = region
+	}
 	return AWSEndpoint{
-		Partition: "aws",
-		Host:      host,
-		Service:   family.Service,
-		Region:    region,
-		Global:    global,
-		Scope:     scopeFor(global),
-		FIPS:      fips,
-		DualStack: dualstack,
+		Partition:      "aws",
+		Host:           host,
+		Service:        family.Service,
+		SigningService: family.SigningService,
+		SigningRegion:  signingRegion,
+		Region:         region,
+		Global:         global,
+		Scope:          scopeFor(global),
+		FIPS:           fips,
+		DualStack:      dualstack,
+		AccountID:      account,
 	}
 }
 
