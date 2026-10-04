@@ -164,11 +164,11 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 	if d.configErr != nil {
 		return nil, fmt.Errorf("decoder configuration: %w", d.configErr)
 	}
-	if err = e.Validate(); err != nil || !sameEndpoint(e, v.Endpoint) {
+	if err = e.Validate(); err != nil || !SameEndpoint(e, v.Endpoint) {
 		return nil, errors.New("endpoint evidence disagrees")
 	}
 	ce, cerr := d.classifier.Classify(e.Host)
-	if cerr != nil || !sameEndpoint(ce, e) {
+	if cerr != nil || !SameEndpoint(ce, e) {
 		return nil, errors.New("endpoint identity could not be revalidated")
 	}
 	r := v.Request
@@ -182,8 +182,18 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 	if he != nil || host != e.Host {
 		return nil, errors.New("request host disagrees with endpoint")
 	}
-	if v.SigningService != e.Service || v.SigningRegion == "" || (!e.IsGlobal() && v.SigningRegion != e.Region) {
+	expectedSigningService, expectedSigningRegion := e.SigningService, e.SigningRegion
+	if expectedSigningService == "" { // compatibility for pre-identity callers; classifiers are explicit.
+		expectedSigningService = e.Service
+	}
+	if expectedSigningRegion == "" && !e.IsGlobal() {
+		expectedSigningRegion = e.Region
+	}
+	if v.SigningService != expectedSigningService || v.SigningRegion != expectedSigningRegion {
 		return nil, errors.New("credential scope disagrees with endpoint")
+	}
+	if e.AccountID != "" && e.AccountID != d.callerAccountID {
+		return nil, errors.New("endpoint account disagrees with caller context")
 	}
 	if v.SigningScheme != SigningHeaderV4 || !v.PayloadMode.Supported() {
 		return nil, errors.New("unsupported authenticated request")
@@ -255,7 +265,7 @@ func (d *Decoder) Decode(ctx context.Context, v *VerifiedRequest, e AWSEndpoint)
 		}
 		return nil, NewDecodeFailureError(protocolEvidence, berr)
 	}
-	out = &DecodedAWSRequest{Partition: e.Partition, EndpointHost: e.Host, Service: e.Service, Region: e.Region, CallerAccountID: d.callerAccountID, Protocol: protocol, Method: r.Method, CanonicalPath: r.URL.EscapedPath(), CanonicalQuery: requestQuery, Headers: safeHeaders(r.Header), Parameters: map[string]Value{}, PayloadHashMode: v.PayloadMode, PayloadBytes: int64(len(body))}
+	out = &DecodedAWSRequest{Partition: e.Partition, EndpointHost: e.Host, Service: e.Service, SigningService: expectedSigningService, SigningRegion: expectedSigningRegion, Region: e.Region, Scope: e.EffectiveScope(), FIPS: e.FIPS, DualStack: e.DualStack, AccountID: e.AccountID, CallerAccountID: d.callerAccountID, Protocol: protocol, Method: r.Method, CanonicalPath: r.URL.EscapedPath(), CanonicalQuery: requestQuery, Headers: safeHeaders(r.Header), Parameters: map[string]Value{}, PayloadHashMode: v.PayloadMode, PayloadBytes: int64(len(body))}
 	if out.CanonicalPath == "" {
 		out.CanonicalPath = "/"
 	}
@@ -564,9 +574,6 @@ func protocolFromHeaders(claimed AWSProtocol, h http.Header, path string) (AWSPr
 		return "", errors.New("invalid request path")
 	}
 	return inferred, nil
-}
-func sameEndpoint(a, b AWSEndpoint) bool {
-	return a.Partition == b.Partition && a.Host == b.Host && a.Service == b.Service && a.Region == b.Region && a.IsGlobal() == b.IsGlobal() && a.FIPS == b.FIPS && a.DualStack == b.DualStack
 }
 func safeHeaders(h http.Header) http.Header {
 	o := make(http.Header)

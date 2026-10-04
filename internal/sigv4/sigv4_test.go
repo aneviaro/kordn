@@ -199,20 +199,76 @@ func signedTestRequest(t *testing.T, endpoint awsrequest.AWSEndpoint, fake crede
 	sum := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(sum[:])
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	service := endpoint.SigningService
+	if service == "" {
+		service = endpoint.Service
+	}
 	if err := v4.NewSigner().SignHTTP(context.Background(), aws.Credentials{
 		AccessKeyID: fake.AccessKeyID, SecretAccessKey: fake.SecretAccessKey, SessionToken: fake.SessionToken,
-	}, req, payloadHash, endpoint.Service, signingTestRegion(endpoint), when); err != nil {
+	}, req, payloadHash, service, signingTestRegion(endpoint), when); err != nil {
 		t.Fatal(err)
 	}
 	return req
 }
 
 func signingTestRegion(endpoint awsrequest.AWSEndpoint) string {
-	if endpoint.IsGlobal() {
-		region, _ := globalSigningRegion(endpoint.Service)
-		return region
+	if endpoint.SigningRegion != "" {
+		return endpoint.SigningRegion
 	}
 	return endpoint.Region
+}
+
+func TestSigningServiceDivergence(t *testing.T) {
+	endpoint, err := awsrequest.ClassifyEndpoint("bedrock-runtime.us-east-1.amazonaws.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.Service != "bedrock-runtime" || endpoint.SigningService != "bedrock" || endpoint.SigningRegion != "us-east-1" {
+		t.Fatalf("unexpected Bedrock Runtime signing identity: %+v", endpoint)
+	}
+	fake := credentials.FakeCredential{AccessKeyID: "KORDNFAKEACCESS01", SecretAccessKey: "fake-secret-value", SessionToken: "fake-session-token"}
+	when := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	req := signedTestRequest(t, endpoint, fake, when, http.MethodPost, "/", []byte("payload"))
+	if _, err := VerifyRequest(context.Background(), req, endpoint, fake, WithClock(func() time.Time { return when })); err != nil {
+		t.Fatalf("signing-service-divergent request was rejected: %v", err)
+	}
+	wrong := signedTestRequest(t, endpoint, fake, when, http.MethodPost, "/", []byte("payload"))
+	replaceCredentialScope(t, wrong, "us-east-1", "bedrock-runtime")
+	requireVerificationCode(t, wrong, endpoint, fake, CodeEndpointMismatch, fake.SecretAccessKey)
+
+	portal, err := awsrequest.ClassifyEndpoint("portal.sso.us-east-1.amazonaws.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsigned, err := http.NewRequest(http.MethodGet, "https://"+portal.Host+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsigned.Host = portal.Host
+	requireVerificationCode(t, unsigned, portal, fake, CodeUnsupportedSigning, fake.SecretAccessKey)
+	bearer := unsigned.Clone(unsigned.Context())
+	bearer.Header.Set("Authorization", "Bearer unsupported")
+	requireVerificationCode(t, bearer, portal, fake, CodeUnsupportedSigning)
+}
+
+func TestSigningRegionGlobal(t *testing.T) {
+	fake := credentials.FakeCredential{AccessKeyID: "KORDNFAKEACCESS01", SecretAccessKey: "fake-secret-value", SessionToken: "fake-session-token"}
+	when := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	for _, host := range []string{"budgets.amazonaws.com", "ce.us-east-1.amazonaws.com", "cloudfront.amazonaws.com"} {
+		t.Run(host, func(t *testing.T) {
+			endpoint, err := awsrequest.ClassifyEndpoint(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !endpoint.IsGlobal() || endpoint.Region != "" || endpoint.SigningRegion != "us-east-1" {
+				t.Fatalf("unexpected global signing identity: %+v", endpoint)
+			}
+			req := signedTestRequest(t, endpoint, fake, when, http.MethodPost, "/", []byte("payload"))
+			if _, err := VerifyRequest(context.Background(), req, endpoint, fake, WithClock(func() time.Time { return when })); err != nil {
+				t.Fatalf("global signing request was rejected: %v", err)
+			}
+		})
+	}
 }
 
 func replaceAuthorizationField(t *testing.T, req *http.Request, field, value string) {
@@ -357,7 +413,7 @@ func TestVerifierRejectsTimestampAndScopeMismatches(t *testing.T) {
 	replaceCredentialScope(t, wrongService, "us-east-1", "iam")
 	requireVerificationCode(t, wrongService, endpoint, fake, CodeEndpointMismatch, fake.SecretAccessKey)
 
-	globalEndpoint := awsrequest.AWSEndpoint{Partition: "aws", Host: "iam.amazonaws.com", Service: "iam", Region: "us-west-2", Scope: awsrequest.ScopeGlobal}
+	globalEndpoint := awsrequest.AWSEndpoint{Partition: "aws", Host: "iam.amazonaws.com", Service: "iam", SigningService: "iam", SigningRegion: "us-east-1", Scope: awsrequest.ScopeGlobal}
 	global := signedTestRequest(t, globalEndpoint, fake, clock, http.MethodPost, "/", body)
 	verified, err := VerifyRequest(context.Background(), global, globalEndpoint, fake, WithClock(func() time.Time { return clock }))
 	if err != nil || verified == nil {

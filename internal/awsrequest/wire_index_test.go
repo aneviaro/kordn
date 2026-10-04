@@ -137,6 +137,87 @@ func TestQueryExactVersionBucketsPreserveOccurrenceMultiplicity(t *testing.T) {
 	}
 }
 
+func TestTier1WireIndexPreservesExactRDSQueryVersions(t *testing.T) {
+	catalog, err := iamlivecatalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := buildWireIndex(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := map[string]bool{}
+	for _, service := range catalog.WireServices() {
+		if service.EndpointPrefix != "rds" || service.Protocol != "query" {
+			continue
+		}
+		for _, operation := range service.Operations {
+			if operation.Name == "DescribeDBInstances" && operation.State == iamlivecatalog.EvidenceKnown {
+				versions[service.APIVersion] = true
+			}
+		}
+	}
+	if len(versions) < 2 {
+		t.Fatalf("RDS repeated query model versions = %d, want at least 2", len(versions))
+	}
+	for version := range versions {
+		key := queryIndexKey{"rds", string(ProtocolQuery), version, "DescribeDBInstances"}
+		if len(idx.query[key]) == 0 {
+			t.Errorf("RDS DescribeDBInstances has no exact wire bucket for API version %q", version)
+		}
+	}
+	// An unambiguous older model remains addressable, while the pinned latest
+	// model deliberately retains its repeated occurrences and therefore fails
+	// closed instead of borrowing evidence from another API version.
+	if !catalogQueryOperation(idx, "rds", "2013-02-12", ProtocolQuery, "DescribeDBInstances") {
+		t.Fatal("RDS operation from an exact, unambiguous API version was not addressable")
+	}
+	latest := idx.query[queryIndexKey{"rds", string(ProtocolQuery), "2014-10-31", "DescribeDBInstances"}]
+	if len(latest) < 2 || catalogQueryOperation(idx, "rds", "2014-10-31", ProtocolQuery, "DescribeDBInstances") {
+		t.Fatalf("RDS repeated latest-model occurrences were collapsed or accepted: %d", len(latest))
+	}
+	if catalogQueryOperation(idx, "rds", "2014-10-30", ProtocolQuery, "DescribeDBInstances") {
+		t.Fatal("RDS operation from an absent API version satisfied an exact query bucket")
+	}
+}
+
+func TestTier1WireIndexPreservesExactJSONWireVersion(t *testing.T) {
+	catalog, err := iamlivecatalog.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := buildWireIndex(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected iamlivecatalog.WireService
+	var operation iamlivecatalog.WireOperation
+	for _, service := range catalog.WireServices() {
+		if service.EndpointPrefix != "acm" || service.Protocol != "json" || service.APIVersion != "2015-12-08" {
+			continue
+		}
+		for _, candidate := range service.Operations {
+			if candidate.State == iamlivecatalog.EvidenceKnown && candidate.Route.JSONVersion == "1.1" {
+				selected, operation = service, candidate
+				break
+			}
+		}
+		if operation.Name != "" {
+			break
+		}
+	}
+	if operation.Name == "" {
+		t.Fatal("pinned ACM JSON 1.1 operation was not found")
+	}
+	target := selected.TargetPrefix + "." + operation.Name
+	if got, err := targetOperationFor(target, "acm", ProtocolJSON11, idx, 128); err != nil || got != operation.Name {
+		t.Fatalf("exact JSON 1.1 operation lookup failed: %q %v", got, err)
+	}
+	if got, err := targetOperationFor(target, "acm", ProtocolJSON10, idx, 128); err == nil {
+		t.Fatalf("JSON 1.0 incorrectly satisfied a JSON 1.1 operation lookup: %q", got)
+	}
+}
+
 func TestModeledWireRouteRejectsWrongHTTPMethods(t *testing.T) {
 	cases := []struct {
 		name     string

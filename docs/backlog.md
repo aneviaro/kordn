@@ -197,25 +197,28 @@ local `kordn run` process, not a separate daemon or network control plane.
 
 ### Current endpoint boundary
 
-The pinned iamlive catalog contains 426 API model identifiers, but the positive
-commercial endpoint classifier currently recognizes only these 16 endpoint
+The pinned iamlive catalog contains 426 API model identifiers. The positive
+commercial endpoint classifier retains explicit shape profiles for these 16
 families: `sts`, `iam`, `s3`, `ec2`, `ecs`, `monitoring` (CloudWatch), `logs`,
 `lambda`, `dynamodb`, `kms`, `sqs`, `sns`, `events`, `cloudformation`,
-`route53`, and `organizations`. The other 410 catalog identifiers are not yet
-interceptable through the production AWS path. They are grouped below by
-estimated roadmap priority, with identifiers alphabetized within each tier.
-This is a prioritization, not an official AWS popularity ranking.
+`route53`, and `organizations`; ordinary unambiguous catalog identities use the
+generic commercial regional profile. The 42 Tier 1 identifiers have completed
+family-level endpoint acceptance, while Tier 2 and Tier 3 remain unverified
+compatibility work even where generic classification is possible. They are
+grouped below by estimated roadmap priority, with identifiers alphabetized within
+each tier. This is a prioritization, not an official AWS popularity ranking.
 
-#### Tier 1 — highest priority
+#### Tier 1 — endpoint classification complete
 
-`accessanalyzer`, `acm`, `apigateway`, `apigatewayv2`, `athena`, `autoscaling`,
-`backup`, `bedrock`, `bedrock-runtime`, `budgets`, `ce`, `cloudfront`,
-`cloudtrail`, `cognito-identity`, `cognito-idp`, `config`, `ebs`, `ecr`, `eks`,
-`elasticache`, `elasticfilesystem`, `elasticloadbalancing`,
-`elasticloadbalancingv2`, `elasticmapreduce`, `firehose`, `glue`, `guardduty`,
-`kinesis`, `opensearch`, `rds`, `redshift`, `s3control`, `sagemaker`,
-`secretsmanager`, `service-quotas`, `sesv2`, `ssm`, `sso`, `sso-admin`, `states`,
-`wafv2`, `xray`
+The 42 Tier 1 identifiers now have catalog-derived positive endpoint coverage,
+including shared prefixes, divergent API/signing identities, global scope, and
+S3 Control account-labelled hosts. The family-level matrix is
+[`docs/aws-endpoint-coverage.md`](aws-endpoint-coverage.md). This status proves
+endpoint classification only: the pinned iamlive catalog remains the source of
+operation and IAM mapping support, and the matrix records the smaller set of
+explicitly exercised allow/deny compatibility cases. It does not complete the
+background authorization mode or claim individually verified compatibility for
+all 42 services.
 
 #### Tier 2 — common production services
 

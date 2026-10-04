@@ -195,18 +195,18 @@ Files:
   collision, ambiguity, and pin-update widening contracts.
 
 Steps:
-- [ ] Iterate every pinned service-model occurrence and derive its API endpoint
+- [x] Iterate every pinned service-model occurrence and derive its API endpoint
   prefix and effective signing name, preserving repeated versions and aliases
   while avoiding operation-level copies.
-- [ ] Group models by endpoint prefix only when all signing identity evidence
+- [x] Group models by endpoint prefix only when all signing identity evidence
   agrees; reject empty, malformed, contradictory, or unsupported metadata.
-- [ ] Keep global scope, account-labelled shapes, and known metadata conflicts
+- [x] Keep global scope, account-labelled shapes, and known metadata conflicts
   in a small explicit override/exclusion table owned by `awsrequest`; keep
   ordinary regional services entirely catalog-derived.
-- [ ] Prove a newly added unambiguous ordinary service in a synthetic catalog
+- [x] Prove a newly added unambiguous ordinary service in a synthetic catalog
   becomes classifiable without a production code-list change, while an
   ambiguous synthetic service fails classifier construction.
-- [ ] If a temporary extraction script or report is used during implementation,
+- [x] If a temporary extraction script or report is used during implementation,
   delete it before completing the task; retain only production code and normal
   Go tests.
 
@@ -266,25 +266,25 @@ Files:
   binding regressions.
 
 Steps:
-- [ ] Define `AWSEndpoint.Service` as the exact API/catalog endpoint prefix and
+- [x] Define `AWSEndpoint.Service` as the exact API/catalog endpoint prefix and
   add required `SigningService` and `SigningRegion` fields; retain endpoint
   `Region` as the observed regional host identity and keep it empty for global
   endpoints.
-- [ ] Add a narrowly validated optional account ID field for approved
+- [x] Add a narrowly validated optional account ID field for approved
   account-labelled host rules; reject empty, non-decimal, non-12-digit, or
   conflicting account evidence.
-- [ ] Replace permissive service-string checks with bounded DNS-like API service
+- [x] Replace permissive service-string checks with bounded DNS-like API service
   validation that accepts reviewed multi-label names but rejects empty labels,
   leading/trailing dots or hyphens, Unicode, and unrelated host content.
-- [ ] Make SigV4 verification and re-signing consume only explicit signing
+- [x] Make SigV4 verification and re-signing consume only explicit signing
   fields; make decoders and mappers consume only API service identity.
-- [ ] Replace partial struct comparisons with one complete identity comparison
+- [x] Replace partial struct comparisons with one complete identity comparison
   covering partition, host, API service, endpoint Region/scope, signing
   service/Region, FIPS, dual-stack, and account evidence.
-- [ ] Correct the existing monitoring family to API/signing service
+- [x] Correct the existing monitoring family to API/signing service
   `monitoring`; prove that its mapped IAM actions may still use the
   `cloudwatch:` namespace without weakening cross-boundary checks.
-- [ ] Add failures for every mismatched identity dimension and prove no mismatch
+- [x] Add failures for every mismatched identity dimension and prove no mismatch
   reaches policy evaluation or upstream forwarding.
 
 Verification:
@@ -328,20 +328,20 @@ Files:
   while non-AWS CONNECT remains opaque.
 
 Steps:
-- [ ] Preserve reusable regional/global shape profiles rather than enumerating
+- [x] Preserve reusable regional/global shape profiles rather than enumerating
   API operations, service Regions, or every hostname instance.
-- [ ] Extend prefix matching from one DNS label to a bounded catalog-validated
+- [x] Extend prefix matching from one DNS label to a bounded catalog-validated
   sequence so names such as `api.ecr`, `api.sagemaker`, and `portal.sso` can use
   the same regional profile machinery.
-- [ ] Add explicit matcher branches only for forms generic profiles cannot
+- [x] Add explicit matcher branches only for forms generic profiles cannot
   express safely: regional-looking global endpoints and 12-digit account labels.
-- [ ] Preserve exact `amazonaws.com` and `api.aws` suffix checks, current
+- [x] Preserve exact `amazonaws.com` and `api.aws` suffix checks, current
   commercial Region validation, normalized CONNECT/inner-Host agreement, port
   443, positive/negative bounded caches, and rejection of unknown services.
-- [ ] Keep the existing 16 families on the same profiles unless identity
+- [x] Keep the existing 16 families on the same profiles unless identity
   separation requires a metadata correction; do not narrow previously accepted
   standard/FIPS/dual-stack forms as part of this plan.
-- [ ] Add negative cases for unknown service prefixes, extra labels, malformed
+- [x] Add negative cases for unknown service prefixes, extra labels, malformed
   account IDs, unsupported partitions, suffix lookalikes, and invalid ports.
 
 Verification:
@@ -379,16 +379,16 @@ Files:
   versions remain exact wire-version matches after endpoint expansion.
 
 Steps:
-- [ ] Keep the 25 ordinary Tier 1 identifiers only in the test acceptance
+- [x] Keep the 25 ordinary Tier 1 identifiers only in the test acceptance
   cohort; do not add corresponding production family entries.
-- [ ] Generate each standard regional host from its catalog endpoint prefix and
+- [x] Generate each standard regional host from its catalog endpoint prefix and
   prove it classifies with the catalog's effective signing identity.
-- [ ] Add representative FIPS/dual-stack profile tests across the cohort; avoid
+- [x] Add representative FIPS/dual-stack profile tests across the cohort; avoid
   duplicating every generic shape for every service.
-- [ ] Prove each classified API service resolves to the pinned authoritative
+- [x] Prove each classified API service resolves to the pinned authoritative
   protocol and that exact wire API version remains required for Query and JSON
   operation lookup.
-- [ ] Assert that endpoint success alone does not bypass absent, ambiguous, or
+- [x] Assert that endpoint success alone does not bypass absent, ambiguous, or
   incomplete IAM mapping evidence.
 
 Verification:
@@ -435,18 +435,18 @@ Files:
   host account evidence to decoded/mapped resource context.
 
 Steps:
-- [ ] Aggregate shared endpoint prefixes from catalog evidence without guessing
+- [x] Aggregate shared endpoint prefixes from catalog evidence without guessing
   an API model from hostname alone; decoder wire version/target evidence must
   continue to select the exact model.
-- [ ] Verify that multi-label, renamed, and signing-divergent services use the
+- [x] Verify that multi-label, renamed, and signing-divergent services use the
   generic matcher directly from catalog identity without static family entries.
-- [ ] Add `budgets`, `ce`, and `cloudfront` overrides with explicit global scope
+- [x] Add `budgets`, `ce`, and `cloudfront` overrides with explicit global scope
   and signing Region, including the regional-looking `ce` hostname.
-- [ ] Add bounded S3 Control account-prefixed matching, retain the 12-digit
+- [x] Add bounded S3 Control account-prefixed matching, retain the 12-digit
   account as endpoint evidence, and deny account disagreement before policy.
-- [ ] Classify reviewed SSO portal endpoints while retaining mandatory SigV4
+- [x] Classify reviewed SSO portal endpoints while retaining mandatory SigV4
   and local denial for unsigned/bearer-only operations.
-- [ ] Add negatives for equivalent-looking unknown spellings, arbitrary
+- [x] Add negatives for equivalent-looking unknown spellings, arbitrary
   subdomains, malformed account labels, service-generated hosts, and unsupported
   partitions.
 
@@ -506,21 +506,21 @@ Files:
   tested compatibility counts.
 
 Steps:
-- [ ] Add representative vertical cases for Query, JSON, REST-JSON, and
+- [x] Add representative vertical cases for Query, JSON, REST-JSON, and
   REST-XML; include at least one shared family, multi-label/signing-divergent
   family, global family, and S3 Control account-labelled family.
-- [ ] Separate fixture `api_service`, `signing_service`, endpoint Region, and
+- [x] Separate fixture `api_service`, `signing_service`, endpoint Region, and
   signing Region fields so tests cannot reintroduce identity conflation.
-- [ ] For complete catalog evidence, prove an allowed request is re-signed with
+- [x] For complete catalog evidence, prove an allowed request is re-signed with
   the reviewed signing identity and reaches fake AWS; for incomplete or
   unsupported evidence, prove a stable local denial and an empty upstream
   ledger.
-- [ ] Retain adversarial tests proving non-AWS CONNECT remains byte-opaque and
+- [x] Retain adversarial tests proving non-AWS CONNECT remains byte-opaque and
   unsupported AWS-looking hosts are rejected rather than tunneled or
   intercepted.
-- [ ] Validate that the family-level documentation covers all 42 identifiers
+- [x] Validate that the family-level documentation covers all 42 identifiers
   while operation support continues to come from the pinned iamlive catalog.
-- [ ] Update only Tier 1 backlog status after all executable coverage passes;
+- [x] Update only Tier 1 backlog status after all executable coverage passes;
   do not remove or mark the broader background authorization mode complete.
 
 Verification:

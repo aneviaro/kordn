@@ -15,6 +15,26 @@ parent corporate proxy settings before constructing that child environment and
 uses a separate outbound transport, so it cannot recursively proxy its own
 credential refresh through the child-facing listener.
 
+## Endpoint and request identities
+
+Endpoint classification carries the exact API/model endpoint prefix, observed
+endpoint Region and scope, and any approved account label. The SigV4
+credential scope carries an independent signing service and signing Region;
+these values may differ from the endpoint prefix (for example, ECR,
+SageMaker, Bedrock Runtime, SES v2, SSO, or S3 Control). The decoded request's
+IAM service/action/resource requirements are a third identity owned by
+`internal/iammap`. No one of these identities is inferred from another at the
+policy or forwarding boundary.
+
+The pinned iamlive catalog is a neutral source of model and operation evidence.
+`internal/awsrequest` compiles only its unambiguous service endpoint/signing
+identity into the positive commercial classifier. Classification activates
+AWS interception but does not authorize an operation. Authentication, exact
+wire-version/protocol and operation decoding, complete mapping, policy, audit,
+and upstream re-signing remain independent fail-closed stages. The family
+coverage and its deliberately smaller executable operation cohort are recorded
+in [`docs/aws-endpoint-coverage.md`](aws-endpoint-coverage.md).
+
 ## Protocol split
 
 CONNECT authority and inner `Host` are classified independently. A recognized

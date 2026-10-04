@@ -469,31 +469,21 @@ func verifySignedHost(req *http.Request, signed []string, endpoint awsrequest.AW
 }
 
 func verifySigningScope(endpoint awsrequest.AWSEndpoint, region, service string) error {
-	if service != endpoint.Service {
-		return newError(CodeEndpointMismatch, "credential service does not match endpoint")
+	expectedService := endpoint.SigningService
+	if expectedService == "" { // pre-identity endpoint compatibility
+		expectedService = endpoint.Service
 	}
-	if endpoint.IsGlobal() {
-		if expected, ok := globalSigningRegion(endpoint.Service); !ok || region != expected {
-			return newError(CodeEndpointMismatch, "global endpoint signing region is invalid")
-		}
-		return nil
+	if service != expectedService {
+		return newError(CodeEndpointMismatch, "credential service does not match endpoint signing identity")
 	}
-	if region != endpoint.Region {
-		return newError(CodeEndpointMismatch, "credential region does not match endpoint")
+	expectedRegion := endpoint.SigningRegion
+	if expectedRegion == "" && !endpoint.IsGlobal() {
+		expectedRegion = endpoint.Region
+	}
+	if expectedRegion == "" || region != expectedRegion {
+		return newError(CodeEndpointMismatch, "credential Region does not match endpoint signing identity")
 	}
 	return nil
-}
-
-// globalSigningRegion is intentionally an explicit table. A global endpoint
-// never inherits a caller-selected Region and an unlisted global service is
-// rejected rather than guessed.
-func globalSigningRegion(service string) (string, bool) {
-	switch service {
-	case "iam", "organizations", "route53", "s3", "sts":
-		return "us-east-1", true
-	default:
-		return "", false
-	}
 }
 
 func validScopeRegion(region string) bool {
@@ -509,15 +499,7 @@ func validScopeRegion(region string) bool {
 }
 
 func validScopeService(service string) bool {
-	if service == "" || len(service) > 64 {
-		return false
-	}
-	for _, c := range service {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-			return false
-		}
-	}
-	return true
+	return len(service) <= 128 && awsrequest.ValidateSigningService(service) == nil
 }
 
 func signingKey(secret, date, region, service, stringToSign string) []byte {
